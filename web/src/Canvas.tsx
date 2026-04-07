@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
-import { Group, Layer, Rect, Stage, Transformer } from 'react-konva'
+import { Circle, Group, Layer, Line, Path, Rect, Stage, Text, Transformer } from 'react-konva'
 
 import { AppIcon, Icons } from './lib/icons'
 import { isTypingTarget } from './lib/domEvents'
@@ -20,7 +20,7 @@ import { EngravePreviewStack, ShapeRenderer } from './ShapeRenderer'
 import { useCanvasState } from './hooks/useCanvasState'
 import { useSelection } from './hooks/useSelection'
 import { useEditorStore } from './store'
-import type { MarqueeRect, ViewportState } from './types/editor'
+import type { CanvasNode, CircleNode, GroupNode, LineNode, PathNode, RectNode, MarqueeRect, ViewportState } from './types/editor'
 
 interface Point {
   x: number
@@ -46,6 +46,77 @@ const MAX_ARTBOARD_SIZE = 2000
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
 const WHEEL_SCALE_BY = 1.02
+
+function renderOutlineNode(nodeId: string, nodesById: Record<string, CanvasNode>): React.ReactElement | null {
+  const node = nodesById[nodeId]
+  if (!node || !node.visible) return null
+  const sharedTransform = {
+    x: node.x,
+    y: node.y,
+    rotation: node.rotation ?? 0,
+    scaleX: node.scaleX ?? 1,
+    scaleY: node.scaleY ?? 1,
+  }
+  if (node.type === 'group') {
+    const g = node as GroupNode
+    return (
+      <Group key={nodeId} {...sharedTransform}>
+        {g.childIds.map((childId) => renderOutlineNode(childId, nodesById))}
+      </Group>
+    )
+  }
+  const base = {
+    key: nodeId,
+    ...sharedTransform,
+    stroke: '#0d99ff',
+    strokeWidth: 1,
+    strokeScaleEnabled: false,
+    fill: '',
+    listening: false,
+  }
+  if (node.type === 'path') return <Path {...base} data={(node as PathNode).data} />
+  if (node.type === 'rect') {
+    const n = node as RectNode
+    return <Rect {...base} width={n.width} height={n.height} cornerRadius={n.cornerRadius} />
+  }
+  if (node.type === 'circle') return <Circle {...base} radius={(node as CircleNode).radius} />
+  if (node.type === 'line') {
+    const n = node as LineNode
+    return <Line {...base} points={n.points} closed={n.closed} />
+  }
+  return null
+}
+
+// Renders a node wrapped in its ancestor group transforms so nested nodes
+// are positioned correctly regardless of how deep they sit in the hierarchy.
+function renderOutlineNodeWithAncestors(
+  targetId: string,
+  nodesById: Record<string, CanvasNode>,
+): React.ReactElement | null {
+  // Build the chain from the artboard-level root down to the target node.
+  const chain: string[] = []
+  let currentId: string | undefined = targetId
+  while (currentId) {
+    chain.unshift(currentId)
+    const n = nodesById[currentId]
+    currentId = n?.parentId ?? undefined
+  }
+
+  function renderChain(remaining: string[]): React.ReactElement | null {
+    if (remaining.length === 0) return null
+    const [id, ...rest] = remaining
+    const node = nodesById[id]
+    if (!node || !node.visible) return null
+    const t = { x: node.x, y: node.y, rotation: node.rotation ?? 0, scaleX: node.scaleX ?? 1, scaleY: node.scaleY ?? 1 }
+    if (rest.length === 0) {
+      // Reached the target — render it (and all its children if it's a group)
+      return renderOutlineNode(id, nodesById)
+    }
+    return <Group key={id} {...t}>{renderChain(rest)}</Group>
+  }
+
+  return renderChain(chain)
+}
 
 const isEmptyCanvasTarget = (target: Konva.Node): boolean => {
   const name = target.name?.() ?? ''
@@ -188,6 +259,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const showEngravePreview = forceEngravePreview || showEngravePreviewState
   const [isZoomEditing, setIsZoomEditing] = useState(false)
   const [zoomDraft, setZoomDraft] = useState('')
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const zoomInputRef = useRef<HTMLInputElement | null>(null)
   const presetDef = MATERIAL_PRESETS.find((p) => p.id === materialPreset) ?? MATERIAL_PRESETS[0]
   const woodTexture = useImageAsset(presetDef.textureSrc)
@@ -665,7 +737,73 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
   const onPointerMove = () => {
     const stage = stageRef.current
-    if (!stage || pendingImport || !marqueeStartRef.current || interactionBlocked) {
+    if (!stage || pendingImport) {
+      return
+    }
+
+    // Hover detection when not dragging a marquee
+    if (!marqueeStartRef.current && !interactionBlocked) {
+      const pos = stage.getPointerPosition()
+      if (pos) {
+        const activeMode = getEffectiveInteractionMode(interactionMode, directSelectionModifierActive)
+
+        if (activeMode === 'direct') {
+          // In direct selection mode, sample ALL shapes at cursor position
+          // so inner paths aren't occluded by filled closed shapes above them
+          const allShapes = stage.getAllIntersections(pos)
+          const candidates: string[] = []
+          for (const shape of allShapes) {
+            if (isEmptyCanvasTarget(shape)) continue
+            let current: Konva.Node | null = shape
+            while (current) {
+              const id = current.id()
+              if (id && selectableIds.includes(id)) {
+                if (!candidates.includes(id)) candidates.push(id)
+                break
+              }
+              current = current.parent
+            }
+          }
+
+          // Pick the candidate with the smallest bounding area (prefers inner paths)
+          let bestId: string | null = null
+          let bestArea = Infinity
+          for (const id of candidates) {
+            if (selectedIds.includes(id)) continue
+            const ref = nodeRefs.current.get(id)
+            if (ref) {
+              const rect = ref.getClientRect()
+              const area = rect.width * rect.height
+              if (area < bestArea) {
+                bestArea = area
+                bestId = id
+              }
+            }
+          }
+          setHoveredNodeId(bestId)
+        } else {
+          // Group mode: use single topmost intersection (existing behavior)
+          const shape = stage.getIntersection(pos)
+          if (!shape || isEmptyCanvasTarget(shape)) {
+            setHoveredNodeId(null)
+          } else {
+            let current: Konva.Node | null = shape
+            let foundId: string | null = null
+            while (current) {
+              const id = current.id()
+              if (id && selectableIds.includes(id)) {
+                foundId = id
+                break
+              }
+              current = current.parent
+            }
+            setHoveredNodeId(foundId && !selectedIds.includes(foundId) ? foundId : null)
+          }
+        }
+      }
+    }
+
+    if (!marqueeStartRef.current || interactionBlocked) {
       return
     }
 
@@ -872,6 +1010,27 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     directSelectionModifierActive,
   )
 
+  const hoverRect = hoveredNodeId
+    ? getNodeScreenRect(nodeRefs.current.get(hoveredNodeId) ?? null)
+    : null
+
+  const selectionBoundingRect = (() => {
+    if (selectedIds.length === 0 || selectedStage) return null
+    const rects = selectedIds.flatMap((id) => {
+      const n = nodeRefs.current.get(id)
+      const r = n ? getNodeScreenRect(n) : null
+      return r ? [r] : []
+    })
+    if (rects.length === 0) return null
+    const minX = Math.min(...rects.map((r) => r.x))
+    const minY = Math.min(...rects.map((r) => r.y))
+    const maxX = Math.max(...rects.map((r) => r.x + r.width))
+    const maxY = Math.max(...rects.map((r) => r.y + r.height))
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  })()
+
+  const outlineSourceIds = [...new Set([...selectedIds, ...(hoveredNodeId ? [hoveredNodeId] : [])])]
+
   const cursor = isPanning || panToolActive ? (isPanning ? 'grabbing' : 'grab') : isSpacePressed ? 'grab' : 'default'
 
   return (
@@ -1029,6 +1188,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
         onMouseDown={onPointerDown}
         onMouseMove={onPointerMove}
         onMouseUp={onPointerUp}
+        onMouseLeave={() => setHoveredNodeId(null)}
         onClick={onStageClick}
         onWheel={handleWheel}
       >
@@ -1169,16 +1329,42 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
               return newBox
             }}
-            anchorStroke="#9a3412"
-            anchorFill="#fff7ed"
-            borderStroke="#ea580c"
-            borderDash={[5, 4]}
+            anchorStroke="#0d99ff"
+            anchorFill="#ffffff"
+            anchorSize={8}
+            borderStroke="#0d99ff"
+            borderDash={[]}
+            anchorStyleFunc={(anchor) => {
+              if (anchor.hasName('rotater')) {
+                anchor.cornerRadius(anchor.width() / 2)
+              } else {
+                anchor.cornerRadius(1.5)
+              }
+            }}
             onTransformStart={onTransformStart}
             onTransformEnd={onTransformEnd}
           />
         </Layer>
 
+        {/* Illustrator-style thin path outline overlay — document space */}
+        <Layer x={viewport.x} y={viewport.y} scaleX={viewport.scale} scaleY={viewport.scale} listening={false}>
+          <Group x={artboardRect.x} y={artboardRect.y}>
+            {outlineSourceIds.map((id) => renderOutlineNodeWithAncestors(id, nodesById))}
+          </Group>
+        </Layer>
+
         <Layer ref={guideLayerRef} listening={false}>
+          {hoverRect ? (
+            <Rect
+              x={hoverRect.x}
+              y={hoverRect.y}
+              width={hoverRect.width}
+              height={hoverRect.height}
+              stroke="#0d99ff"
+              strokeWidth={1}
+              listening={false}
+            />
+          ) : null}
           {marqueeHighlights.map(({ id, rect }) => (
             <Rect
               key={id}
@@ -1186,12 +1372,8 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
               y={rect.y}
               width={rect.width}
               height={rect.height}
-              stroke="#1a73e8"
-              strokeWidth={1.5}
-              cornerRadius={4}
-              dash={[4, 3]}
-              shadowColor="rgba(26, 115, 232, 0.22)"
-              shadowBlur={8}
+              stroke="#0d99ff"
+              strokeWidth={1}
               listening={false}
             />
           ))}
@@ -1201,13 +1383,48 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
               y={marquee.y}
               width={marquee.width}
               height={marquee.height}
-              fill="rgba(56,189,248,0.15)"
-              stroke="#38bdf8"
+              fill="rgba(24,160,251,0.1)"
+              stroke="#0d99ff"
               strokeWidth={1}
-              dash={[6, 4]}
               listening={false}
             />
           ) : null}
+          {selectionBoundingRect ? (() => {
+            const fmtN = (v: number) => {
+              const n = Math.round((v / viewport.scale) * 10) / 10
+              return n % 1 === 0 ? String(Math.round(n)) : n.toFixed(1)
+            }
+            const label = `${fmtN(selectionBoundingRect.width)} × ${fmtN(selectionBoundingRect.height)}`
+            const PILL_H = 20
+            const PILL_W = 110
+            const pillX = selectionBoundingRect.x + selectionBoundingRect.width / 2 - PILL_W / 2
+            const pillY = selectionBoundingRect.y + selectionBoundingRect.height + 7
+            return (
+              <>
+                <Rect
+                  x={pillX}
+                  y={pillY}
+                  width={PILL_W}
+                  height={PILL_H}
+                  fill="#0d99ff"
+                  cornerRadius={4}
+                  listening={false}
+                />
+                <Text
+                  x={pillX}
+                  y={pillY + 4}
+                  width={PILL_W}
+                  text={label}
+                  fill="#ffffff"
+                  fontSize={11}
+                  fontStyle="500"
+                  fontFamily="Inter, system-ui, sans-serif"
+                  align="center"
+                  listening={false}
+                />
+              </>
+            )
+          })() : null}
         </Layer>
       </Stage>
     </div>

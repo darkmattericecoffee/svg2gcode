@@ -42,6 +42,7 @@ interface SharedShapeProps {
   listening: boolean
   draggable: boolean
   isSelected: boolean
+  activeInteractionMode: 'group' | 'direct'
   showCncOverrides?: boolean
   outlineOnly?: boolean
   hitboxOnly?: boolean
@@ -62,6 +63,7 @@ function SvgPathNode({
   listening,
   draggable,
   isSelected,
+  activeInteractionMode,
   showCncOverrides,
   outlineOnly,
   parentCncMetadata,
@@ -88,10 +90,23 @@ function SvgPathNode({
   if (outlineOnly) {
     delete visualProps.fill
   }
+  if (isSelected && !outlineOnly) {
+    visualProps.stroke = '#0d99ff'
+    if (!visualProps.strokeWidth) visualProps.strokeWidth = 1.5
+  }
+
+  // In direct selection mode, only hit-test the stroke so fills don't occlude inner paths
+  const strokeOnlyHitFunc = activeInteractionMode === 'direct' && node.fill
+    ? (context: any, shape: any) => {
+        shape._sceneFunc(context)
+        context.strokeShape(shape)
+      }
+    : undefined
 
   return (
     <Path
       ref={(instance) => registerNodeRef(node.id, instance)}
+      id={node.id}
       x={node.x}
       y={node.y}
       data={node.data}
@@ -103,8 +118,7 @@ function SvgPathNode({
       opacity={opacity}
       listening={listening}
       hitStrokeWidth={Math.max((baseStrokeWidth ?? 2) * 2, 12)}
-      shadowColor={isSelected ? '#73bbff' : undefined}
-      shadowBlur={isSelected ? 10 : 0}
+      hitFunc={strokeOnlyHitFunc}
       {...visualProps}
       onMouseDown={onPointerDown}
       onTouchStart={onPointerDown}
@@ -228,6 +242,7 @@ export function ShapeRenderer({
     listening,
     draggable,
     isSelected: isSelected(node.id),
+    activeInteractionMode,
     showCncOverrides,
     outlineOnly,
     hitboxOnly,
@@ -248,6 +263,7 @@ export function ShapeRenderer({
     return (
       <Group
         ref={(instance) => registerNodeRef(node.id, instance)}
+        id={node.id}
         x={groupNode.x}
         y={groupNode.y}
         rotation={groupNode.rotation}
@@ -296,10 +312,26 @@ export function ShapeRenderer({
       cncOverrides,
     )
     if (outlineOnly) delete visualProps.fill
+    if (commonProps.isSelected && !outlineOnly) {
+      visualProps.stroke = '#0d99ff'
+      if (!visualProps.strokeWidth) visualProps.strokeWidth = 1.5
+    }
+
+    const rectStrokeOnlyHitFunc = activeInteractionMode === 'direct' && node.fill
+      ? (context: any, shape: any) => {
+          const w = shape.width()
+          const h = shape.height()
+          context.beginPath()
+          context.rect(0, 0, w, h)
+          context.closePath()
+          context.strokeShape(shape)
+        }
+      : undefined
 
     return (
       <Rect
         ref={(instance) => registerNodeRef(node.id, instance)}
+        id={node.id}
         x={node.x}
         y={node.y}
         width={node.width}
@@ -312,8 +344,8 @@ export function ShapeRenderer({
         visible={node.visible}
         opacity={opacity}
         listening={listening}
-        shadowColor={commonProps.isSelected ? '#73bbff' : undefined}
-        shadowBlur={commonProps.isSelected ? 10 : 0}
+        hitFunc={rectStrokeOnlyHitFunc}
+        hitStrokeWidth={activeInteractionMode === 'direct' && node.fill ? 12 : undefined}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}
@@ -336,10 +368,25 @@ export function ShapeRenderer({
       { fill: node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
       cncOverrides,
     )
+    if (commonProps.isSelected) {
+      visualProps.stroke = '#0d99ff'
+      if (!visualProps.strokeWidth) visualProps.strokeWidth = 1.5
+    }
+
+    const circleStrokeOnlyHitFunc = activeInteractionMode === 'direct' && node.fill
+      ? (context: any, shape: any) => {
+          const r = shape.radius()
+          context.beginPath()
+          context.arc(0, 0, r, 0, Math.PI * 2, false)
+          context.closePath()
+          context.strokeShape(shape)
+        }
+      : undefined
 
     return (
       <Circle
         ref={(instance) => registerNodeRef(node.id, instance)}
+        id={node.id}
         x={node.x}
         y={node.y}
         radius={node.radius}
@@ -350,8 +397,8 @@ export function ShapeRenderer({
         visible={node.visible}
         opacity={opacity}
         listening={listening}
-        shadowColor={commonProps.isSelected ? '#73bbff' : undefined}
-        shadowBlur={commonProps.isSelected ? 10 : 0}
+        hitFunc={circleStrokeOnlyHitFunc}
+        hitStrokeWidth={activeInteractionMode === 'direct' && node.fill ? 12 : undefined}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}
@@ -386,9 +433,30 @@ export function ShapeRenderer({
     )
     const hitWidth = Math.max((baseStrokeWidth ?? 2) * 2, 12)
 
+    if (commonProps.isSelected && !outlineOnly) {
+      visualProps.stroke = '#0d99ff'
+      if (!visualProps.strokeWidth) visualProps.strokeWidth = 1.5
+    }
+
+    const lineStrokeOnlyHitFunc = activeInteractionMode === 'direct' && node.closed && node.fill
+      ? (context: any, shape: any) => {
+          const points = shape.points()
+          const length = points.length
+          if (!length) return
+          context.beginPath()
+          context.moveTo(points[0], points[1])
+          for (let n = 2; n < length; n += 2) {
+            context.lineTo(points[n], points[n + 1])
+          }
+          if (shape.closed()) context.closePath()
+          context.strokeShape(shape)
+        }
+      : undefined
+
     return (
       <Line
         ref={(instance) => registerNodeRef(node.id, instance)}
+        id={node.id}
         x={node.x}
         y={node.y}
         points={node.points}
@@ -404,8 +472,7 @@ export function ShapeRenderer({
         opacity={opacity}
         listening={listening}
         hitStrokeWidth={hitWidth}
-        shadowColor={commonProps.isSelected ? '#73bbff' : undefined}
-        shadowBlur={commonProps.isSelected ? 10 : 0}
+        hitFunc={lineStrokeOnlyHitFunc}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}

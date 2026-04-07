@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Geo } from '@gravity-ui/icons'
-import { Button, Tabs } from '@heroui/react'
+import { Button, Slider, Tabs } from '@heroui/react'
 import GeoFillIcon from '@gravity-ui/icons/svgs/geo-fill.svg'
 
 import { isOpenPathNode, normalizeEngraveType } from '../lib/cncVisuals'
@@ -272,7 +272,7 @@ function DesignTabContent() {
                     type="number"
                     step="0.1"
                     min="0"
-                    max="20"
+                    max={String(artboard.thickness)}
                     placeholder="e.g. 3.5"
                     value={meta.cutDepth !== undefined ? String(meta.cutDepth) : ''}
                     className="h-full min-w-0 flex-1 border-0 bg-transparent px-2 text-sm text-foreground outline-none"
@@ -296,23 +296,44 @@ function DesignTabContent() {
                     title={`Depth: ${meta.cutDepth}mm`}
                     style={{
                       background: (() => {
-                        const ratio = Math.min(1, Math.max(0, meta.cutDepth / 20))
+                        const ratio = Math.min(1, Math.max(0, meta.cutDepth / artboard.thickness))
                         return `hsl(${Math.round(60 * (1 - ratio))}, 100%, 45%)`
                       })(),
                     }}
                   />
                 )}
               </div>
-              {/* Depth gradient */}
+              {/* Depth slider */}
               <div className="flex items-center gap-2">
-                <div
-                  className="h-1.5 flex-1 rounded-full"
-                  style={{
-                    background:
-                      'linear-gradient(to right, hsl(60,100%,45%), hsl(30,100%,45%), hsl(0,100%,45%))',
-                  }}
-                />
-                <span className="shrink-0 text-xs text-muted-foreground">0 → 20mm</span>
+                <Slider
+                  aria-label="Cut depth"
+                  className="flex-1"
+                  value={meta.cutDepth ?? 0}
+                  minValue={0}
+                  maxValue={artboard.thickness}
+                  step={0.1}
+                  onChange={(value) => applyAll({ cutDepth: value as number })}
+                >
+                  <Slider.Track
+                    className="relative h-2 w-full cursor-pointer rounded-full"
+                    style={{
+                      background:
+                        'linear-gradient(to right, hsl(60,100%,45%), hsl(30,100%,45%), hsl(0,100%,45%))',
+                    }}
+                  >
+                    <Slider.Fill className="absolute inset-y-0 left-0 rounded-full bg-white/25" />
+                    <Slider.Thumb
+                      className="block h-4 w-4 rounded-full border-2 border-white shadow-md outline-none"
+                      style={{
+                        background: (() => {
+                          const ratio = Math.min(1, Math.max(0, (meta.cutDepth ?? 0) / artboard.thickness))
+                          return `hsl(${Math.round(60 * (1 - ratio))}, 100%, 45%)`
+                        })(),
+                      }}
+                    />
+                  </Slider.Track>
+                </Slider>
+                <span className="shrink-0 text-xs text-muted-foreground">0 → {artboard.thickness}mm</span>
               </div>
             </div>
 
