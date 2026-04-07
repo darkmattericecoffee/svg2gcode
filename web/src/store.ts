@@ -16,7 +16,7 @@ import type {
 import { parseGcodeProgram } from '@svg2gcode/bridge/viewer'
 import { groupSegments, computeGroupSweep } from './components/preview/segmentsToToolpaths'
 import { insertTabs } from './lib/gcodeTabInsertion'
-import type { CameraType, PreviewState, ViewMode } from './types/preview'
+import type { CameraType, PreviewState, ToolpathGroup, ViewMode } from './types/preview'
 import { DEFAULT_MATERIAL } from './lib/materialPresets'
 import type { MaterialPreset } from './lib/materialPresets'
 
@@ -173,8 +173,6 @@ const initialViewport: ViewportState = {
 }
 
 export const useEditorStore = create<EditorStore>((set, get) => ({
-  // @ts-expect-error - temporary debug helper
-  ...(typeof window !== 'undefined' && ((window as any).__STORE__ = { get, set }) && {}),
   nodesById: initialNodes,
   rootIds: initialRootIds,
   selectedIds: [],
@@ -503,12 +501,18 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }))
   },
   setMachiningSettings: (patch) => {
-    set((state) => ({
-      machiningSettings: {
-        ...state.machiningSettings,
-        ...patch,
-      },
-    }))
+    const tabFields = ['tabsEnabled', 'tabWidth', 'tabHeight', 'tabSpacing'] as const
+    const touchesTabs = tabFields.some((k) => k in patch)
+    set((state) => {
+      const next: Partial<typeof state> = {
+        machiningSettings: { ...state.machiningSettings, ...patch },
+      }
+      // Invalidate cached gcodeText when tab settings change
+      if (touchesTabs && state.preview.gcodeText !== null) {
+        next.preview = { ...state.preview, gcodeText: null }
+      }
+      return next
+    })
   },
   setViewport: (patch) => {
     set((state) => ({
@@ -585,8 +589,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       originalSvg: pendingImport.originalSvg,
       cncMetadata: {
         ...rootNode.cncMetadata,
-        cutDepth: machiningSettings.defaultDepthMm,
-        engraveType: 'pocket' as const,
+        cutDepth: rootNode.cncMetadata?.cutDepth ?? machiningSettings.defaultDepthMm,
+        engraveType: rootNode.cncMetadata?.engraveType ?? ('pocket' as const),
       },
     }
 
@@ -637,6 +641,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     stockBounds: null,
     gcodeText: null,
     previewSnapshot: null,
+    toolShape: null,
   },
   setViewMode: (mode) => {
     set((state) => ({
@@ -727,7 +732,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const rawGroups = groupSegments(program.segments, toolRadius, toolShape)
 
     // Compute sweep shapes incrementally, yielding to the event loop for UI updates
-    const toolpaths = []
+    const toolpaths: ToolpathGroup[] = []
     for (let i = 0; i < rawGroups.length; i++) {
       toolpaths.push(computeGroupSweep(rawGroups[i]))
       const pct = 10 + Math.round((i + 1) / rawGroups.length * 85)
@@ -755,6 +760,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         stockBounds,
         gcodeText: gcode,
         previewSnapshot: result.preview_snapshot,
+        toolShape,
         playbackDistance: 0,
         isPlaying: false,
       },
@@ -771,6 +777,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         stockBounds: null,
         gcodeText: null,
         previewSnapshot: null,
+        toolShape: null,
         playbackDistance: 0,
         isPlaying: false,
       },

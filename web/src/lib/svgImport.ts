@@ -4,6 +4,8 @@ import type {
   ArtboardState,
   CanvasFillRule,
   CanvasNode,
+  CncMetadata,
+  EngraveType,
   GroupNode,
   LineNode,
   MachiningSettings,
@@ -134,6 +136,20 @@ const parseFillRule = (value: string | null | undefined): CanvasFillRule | undef
 
   if (normalized === 'nonzero') {
     return 'nonzero'
+  }
+
+  return undefined
+}
+
+const parseEngraveType = (value: string | null | undefined): EngraveType | undefined => {
+  const normalized = value?.trim().toLowerCase()
+  if (
+    normalized === 'contour' ||
+    normalized === 'pocket' ||
+    normalized === 'outline' ||
+    normalized === 'raster'
+  ) {
+    return normalized
   }
 
   return undefined
@@ -537,6 +553,20 @@ const inferName = (element: Element, fallback: string): string => {
   return id || fallback
 }
 
+const readCncMetadata = (element: Element): CncMetadata | undefined => {
+  const cutDepth = parseNumber(element.getAttribute('data-cut-depth')) ?? undefined
+  const engraveType = parseEngraveType(element.getAttribute('data-engrave-type'))
+
+  if (cutDepth === undefined && engraveType === undefined) {
+    return undefined
+  }
+
+  return {
+    cutDepth,
+    engraveType,
+  }
+}
+
 const readSvgPaint = (element: Element, inheritedPaint: PaintContext, stylesheet?: CssStyleRule[]): PaintContext => {
   const styleMap = parseStyleMap(element)
   const fillValue = getStyleValue(element, styleMap, 'fill', stylesheet)
@@ -692,6 +722,7 @@ export function importSvgToScene({
     const nodeId = createNodeId(context.idPrefix, tagName, nodeIndex)
     const opacity = parseOpacity(getStyleValue(element, styleMap, 'opacity', stylesheet))
     const visible = isVisible(element, styleMap, stylesheet)
+    const cncMetadata = readCncMetadata(element)
     nodeIndex += 1
 
     if (tagName === 'svg' || tagName === 'g') {
@@ -720,6 +751,7 @@ export function importSvgToScene({
         opacity,
         parentId,
         childIds,
+        cncMetadata,
       }
 
       nodesById[nodeId] = groupNode
@@ -764,6 +796,7 @@ export function importSvgToScene({
         stroke: paint.stroke,
         strokeWidth: paint.stroke ? paint.strokeWidth ?? 1 : 0,
         fillRule: paint.fillRule,
+        cncMetadata,
       }
 
       nodesById[nodeId] = pathNode
@@ -824,6 +857,7 @@ export function importSvgToScene({
         fillRule: closed ? paint.fillRule : undefined,
         lineCap: tagName === 'line' ? 'round' : undefined,
         lineJoin: closed ? 'round' : undefined,
+        cncMetadata,
       }
 
       nodesById[nodeId] = lineNode

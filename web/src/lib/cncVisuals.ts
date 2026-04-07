@@ -1,4 +1,5 @@
 import type { CanvasNode, CncMetadata, EngraveType } from '../types/editor'
+import { mergeCncMetadata } from './cncMetadata'
 
 export const MAX_CUT_DEPTH = 20
 
@@ -65,13 +66,11 @@ export function resolveEngraveType(
 }
 
 export function getCncVisualOverrides(
+  node: CanvasNode,
   cncMetadata?: CncMetadata,
   parentCncMetadata?: CncMetadata,
 ): CncVisualOverrides {
-  // Use own metadata, falling back to parent metadata for inheritance
-  const effectiveMeta = cncMetadata?.cutDepth !== undefined
-    ? cncMetadata
-    : parentCncMetadata
+  const effectiveMeta = mergeCncMetadata(cncMetadata, parentCncMetadata)
 
   if (!effectiveMeta) return {}
 
@@ -80,7 +79,9 @@ export function getCncVisualOverrides(
   if (cutDepth === undefined || cutDepth === null) return {}
 
   const ratio = Math.min(1, Math.max(0, cutDepth / MAX_CUT_DEPTH))
-  const type = resolveEngraveType(engraveType, 'contour')
+  const type = isOpenPathNode(node)
+    ? 'contour'
+    : resolveEngraveType(engraveType, 'contour')
 
   if (type === 'pocket') {
     const fillAlpha = 0.30 + ratio * 0.65

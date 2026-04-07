@@ -15,6 +15,7 @@ import type {
   GroupNode,
   MachiningSettings,
 } from "../types/editor"
+import { resolveNodeCncMetadata } from "./cncMetadata"
 import { getSubtreeIds, isGroupNode } from "./editorTree"
 import { getNodeSize } from "./nodeDimensions"
 import { exportToSVG } from "./svgExport"
@@ -229,7 +230,8 @@ function collectLeafCncMetadata(
   }
 
   // Leaf node — resolve engrave type to bridge format
-  const editorType = node.cncMetadata?.engraveType
+  const metadata = resolveNodeCncMetadata(node, nodesById)
+  const editorType = metadata.engraveType
   let bridgeType: BridgeEngraveType | null = null
   if (editorType === "contour" || editorType === "outline") {
     bridgeType = "outline"
@@ -238,7 +240,7 @@ function collectLeafCncMetadata(
   }
 
   return [{
-    cutDepth: node.cncMetadata?.cutDepth,
+    cutDepth: metadata.cutDepth,
     engraveType: bridgeType,
   }]
 }

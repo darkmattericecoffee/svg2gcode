@@ -3,6 +3,7 @@ import { Geo } from '@gravity-ui/icons'
 import { Button, Slider } from '@heroui/react'
 import GeoFillIcon from '@gravity-ui/icons/svgs/geo-fill.svg'
 
+import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { depthToColor, isOpenPathNode, normalizeEngraveType } from '../lib/cncVisuals'
 import { isGroupNode, getSubtreeIds } from '../lib/editorTree'
 import { useEditorStore } from '../store'
@@ -25,25 +26,6 @@ function resolveLeafIds(
     }
   }
   return [...new Set(leafIds)]
-}
-
-/** Resolve effective CNC metadata for a node, inheriting from parent if not set */
-function resolveNodeMetadata(
-  node: CanvasNode,
-  nodesById: Record<string, CanvasNode>,
-): CncMetadata {
-  if (node.cncMetadata?.cutDepth !== undefined) {
-    return node.cncMetadata
-  }
-  let parentId = node.parentId
-  while (parentId) {
-    const parent = nodesById[parentId]
-    if (parent?.cncMetadata?.cutDepth !== undefined) {
-      return parent.cncMetadata
-    }
-    parentId = parent?.parentId ?? null
-  }
-  return node.cncMetadata ?? {}
 }
 
 const ENGRAVE_TYPES: NormalizedEngraveType[] = ['contour', 'pocket']
@@ -79,7 +61,7 @@ function analyzeSelection(
     const node = nodesById[id]
     if (!node) continue
 
-    const meta = resolveNodeMetadata(node, nodesById)
+    const meta = resolveNodeCncMetadata(node, nodesById)
     const depth = meta.cutDepth ?? defaultDepth
     const type = normalizeEngraveType(meta.engraveType)
 
@@ -484,7 +466,7 @@ function buildCutDepthGroups(
   Object.values(nodesById).forEach((node) => {
     if (isGroupNode(node)) return
 
-    const meta = resolveNodeMetadata(node, nodesById)
+    const meta = resolveNodeCncMetadata(node, nodesById)
     const cutDepth = meta.cutDepth ?? defaultDepth
     const isDefault = meta.cutDepth === undefined
     const key = cutDepth.toFixed(3)

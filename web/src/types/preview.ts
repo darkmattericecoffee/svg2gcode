@@ -51,4 +51,5 @@ export interface PreviewState {
   stockBounds: StockBounds | null
   gcodeText: string | null
   previewSnapshot: GenerateJobResponse['preview_snapshot'] | null
+  toolShape: RouterBitShape | null
 }

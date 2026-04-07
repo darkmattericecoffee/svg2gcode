@@ -90,14 +90,17 @@ function findFirstEntry(
 
 /**
  * Find the earliest parametric t ∈ (0, 1] where the segment A→B exits
- * ALL tab zones (i.e. the first point after which no zone contains the tool).
+ * the tab zone(s) that contain the start point A.  Only considers zones
+ * whose entry t ≤ 0 (i.e. the start point is inside), then returns the
+ * latest exit among those (to handle overlapping zones).  Zones further
+ * along the segment are ignored — they'll be picked up as separate
+ * entry/exit pairs by the caller.
  */
 function findFirstExit(
   ax: number, ay: number, bx: number, by: number,
   anchors: TabAnchor[], r: number,
 ): number | null {
-  // Collect all exit t values for zones that contain any part of this segment
-  let latestExitBeforeEnd: number | null = null
+  let latestExit: number | null = null
   const dx = bx - ax, dy = by - ay
   const a = dx * dx + dy * dy
   if (a < 1e-12) return null
@@ -109,30 +112,20 @@ function findFirstExit(
     const disc = b * b - 4 * a * c
     if (disc < 0) continue
     const sqrtDisc = Math.sqrt(disc)
-    const t1 = (-b - sqrtDisc) / (2 * a)
-    const t2 = (-b + sqrtDisc) / (2 * a)
-    const tEntry = Math.max(0, t1)
+    const t1 = (-b - sqrtDisc) / (2 * a) // entry
+    const t2 = (-b + sqrtDisc) / (2 * a) // exit
+    // Only consider zones the start point is inside (t1 <= small epsilon)
+    if (t1 > 1e-9) continue
     const tExit = Math.min(1, t2)
-    if (tEntry >= tExit) continue
-    // This zone overlaps the segment — we need to be past its exit
-    // We want the FIRST exit point, but need to account for overlapping zones
-    // The actual exit is the LAST zone exit we encounter
-    if (tExit > 0 && tExit <= 1) {
-      if (latestExitBeforeEnd === null || tExit > latestExitBeforeEnd) {
-        latestExitBeforeEnd = tExit
-      }
+    if (tExit <= 0) continue
+    // Among overlapping zones at the start, we need the latest exit
+    if (latestExit === null || tExit > latestExit) {
+      latestExit = tExit
     }
   }
 
-  // The exit point is where we leave all zones. But overlapping zones might
-  // extend further. Check that the point at the candidate exit is actually
-  // outside all zones.
-  if (latestExitBeforeEnd !== null && latestExitBeforeEnd < 1 - 1e-9) {
-    const pt = lerp2d({ x: ax, y: ay }, { x: bx, y: by }, Math.min(1, latestExitBeforeEnd + 1e-6))
-    if (!pointInAnyZone(pt.x, pt.y, anchors, r)) {
-      return latestExitBeforeEnd
-    }
-    // Still inside another zone — no real exit on this segment
+  if (latestExit !== null && latestExit < 1 - 1e-9) {
+    return latestExit
   }
 
   return null
@@ -234,7 +227,7 @@ function collectTabAnchors(
         } else {
           // Too close to a corner — defer tab placement, keep accumulating
           // Don't reset accumDist so we try again shortly
-          accumDist = tabSpacing  // will trigger placement check on next segment
+          accumDist = 0  // start fresh interval so walked advances by tabSpacing next iteration
         }
       }
     }
@@ -248,7 +241,10 @@ function collectTabAnchors(
 // ── Phase 2: state-machine enforcement of tab zones ──────────────────────────
 
 export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
-  const { materialThickness, tabWidth, tabHeight, tabSpacing } = opts
+  let { materialThickness, tabWidth, tabHeight, tabSpacing } = opts
+  if (tabSpacing <= 0 || tabWidth <= 0 || materialThickness <= 0) return gcode
+  tabHeight = Math.min(tabHeight, materialThickness - 0.1)
+  if (tabHeight <= 0) return gcode
   const tabZ = -(materialThickness - tabHeight)
   const tabRadius = tabWidth / 2
 
@@ -294,13 +290,17 @@ export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
     const feedStr = curF !== null ? ` F${fmt(curF)}` : ''
 
     const isCut = modalCmd === 'G1' && (hasX || hasY)
-    const isDeepEnough = curZ < tabZ && newZ <= curZ
+    const isDeepEnough = curZ <= tabZ && newZ <= tabZ
 
     // ── Non-cut or shallow moves: exit tab state if needed ──
     if (!isCut || !isDeepEnough) {
       if (inTab) {
-        // Plunge back before leaving cut mode or changing depth
-        out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
+        // Only plunge back if we're continuing to cut (not retracting/rapid)
+        // A retract or rapid means the tool is leaving the workpiece — the tab bridge must stay
+        const isRetractOrRapid = modalCmd === 'G0' || (hasZ && newZ > curZ)
+        if (!isRetractOrRapid) {
+          out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
+        }
         inTab = false
       }
       // If this is a Z-only plunge to a new depth while cutting, update cuttingZ tracking
@@ -330,14 +330,24 @@ export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
           out.push(`G1 X${fmt(exitPt.x)} Y${fmt(exitPt.y)}${feedStr}`)
           // Plunge back to cutting depth
           out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
-          // Continue to segment end at cutting depth
-          out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+          inTab = false
+          // Check for re-entry on the remainder to segment end
+          const reEntry = findFirstEntry(exitPt.x, exitPt.y, newX, newY, anchors, tabRadius)
+          if (reEntry !== null && reEntry > 1e-6) {
+            const reEntryPt = lerp2d(exitPt, { x: newX, y: newY }, reEntry)
+            out.push(`G1 X${fmt(reEntryPt.x)} Y${fmt(reEntryPt.y)}${feedStr}`)
+            out.push(`G1 Z${fmt(tabZ)}${plungeFeedStr}`)
+            out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+            inTab = true
+          } else {
+            out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+          }
         } else {
           // Couldn't find exit precisely — plunge and emit full move
           out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
           out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+          inTab = false
         }
-        inTab = false
       }
     } else {
       // We're cutting at full depth
@@ -356,11 +366,22 @@ export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
             const exitPt = lerp2d({ x: curX, y: curY }, { x: newX, y: newY }, tExit)
             out.push(`G1 X${fmt(exitPt.x)} Y${fmt(exitPt.y)}${feedStr}`)
             out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
-            out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+            inTab = false
+            // Check for re-entry on the remainder
+            const reEntry = findFirstEntry(exitPt.x, exitPt.y, newX, newY, anchors, tabRadius)
+            if (reEntry !== null && reEntry > 1e-6) {
+              const reEntryPt = lerp2d(exitPt, { x: newX, y: newY }, reEntry)
+              out.push(`G1 X${fmt(reEntryPt.x)} Y${fmt(reEntryPt.y)}${feedStr}`)
+              out.push(`G1 Z${fmt(tabZ)}${plungeFeedStr}`)
+              out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+              inTab = true
+            } else {
+              out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+            }
           } else {
             out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+            inTab = false
           }
-          inTab = false
         }
       } else if (endIn) {
         // Enters a zone during this segment
@@ -382,31 +403,51 @@ export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
         }
         inTab = true
       } else {
-        // Both endpoints outside — check if segment passes through a zone
-        const tEntry = findFirstEntry(curX, curY, newX, newY, anchors, tabRadius)
-        if (tEntry !== null) {
-          const entryPt = lerp2d({ x: curX, y: curY }, { x: newX, y: newY }, tEntry)
-          // Cut to entry
+        // Both endpoints outside — check if segment passes through zone(s)
+        // Loop to handle multiple discrete tab zones on one long segment
+        let segX = curX, segY = curY
+        let foundAny = false
+
+        while (true) {
+          const tEntry = findFirstEntry(segX, segY, newX, newY, anchors, tabRadius)
+          if (tEntry === null) break
+
+          const entryPt = lerp2d({ x: segX, y: segY }, { x: newX, y: newY }, tEntry)
+          // Guard against re-entering the zone we just exited (float imprecision)
+          if (foundAny && dist2d({ x: segX, y: segY }, entryPt) < 0.001) break
+          foundAny = true
+
+          // Cut to entry at full depth
           out.push(`G1 X${fmt(entryPt.x)} Y${fmt(entryPt.y)}${feedStr}`)
-          // Rise
+          // Rise to tab height
           cuttingZ = curZ
           out.push(`G1 Z${fmt(tabZ)}${plungeFeedStr}`)
-          // Find exit
-          const tExit = findFirstExit(curX, curY, newX, newY, anchors, tabRadius)
-          if (tExit !== null && tExit < 1 - 1e-6) {
-            const exitPt = lerp2d({ x: curX, y: curY }, { x: newX, y: newY }, tExit)
-            out.push(`G1 X${fmt(exitPt.x)} Y${fmt(exitPt.y)}${feedStr}`)
-            out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
-            out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
-            inTab = false
-          } else {
-            // Entered but didn't exit — stay raised
+
+          // Find exit from entry point (which is inside the zone)
+          const tExit = findFirstExit(entryPt.x, entryPt.y, newX, newY, anchors, tabRadius)
+          if (tExit === null) {
+            // Entered but didn't exit — stay raised to segment end
             out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
             inTab = true
+            break
           }
-        } else {
+
+          const exitPt = lerp2d(entryPt, { x: newX, y: newY }, tExit)
+          out.push(`G1 X${fmt(exitPt.x)} Y${fmt(exitPt.y)}${feedStr}`)
+          out.push(`G1 Z${fmt(cuttingZ)}${plungeFeedStr}`)
+          inTab = false
+          segX = exitPt.x
+          segY = exitPt.y
+        }
+
+        if (!foundAny) {
           // No intersection at all — emit original line
           out.push(rawLine)
+        } else if (!inTab) {
+          // Emit remainder to segment end
+          if (dist2d({ x: segX, y: segY }, { x: newX, y: newY }) > 0.001) {
+            out.push(`G1 X${fmt(newX)} Y${fmt(newY)}${feedStr}`)
+          }
         }
       }
     }
@@ -414,11 +455,8 @@ export function insertTabs(gcode: string, opts: TabInsertionOptions): string {
     curX = newX; curY = newY; curZ = newZ
   }
 
-  // If we end while still in a tab, plunge back
-  if (inTab) {
-    const pf2 = plungeF ?? curF
-    out.push(`G1 Z${fmt(cuttingZ)}${pf2 !== null ? ` F${fmt(pf2)}` : ''}`)
-  }
+  // If we end while still in a tab, do NOT plunge — the post-processor's
+  // end sequence will retract, and the tab bridge must remain intact.
 
   return out.join('\n')
 }

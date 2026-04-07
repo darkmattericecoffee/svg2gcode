@@ -18,6 +18,7 @@ import {
   getEngravePreviewStroke,
   isOpenPathNode,
 } from './lib/cncVisuals'
+import { mergeCncMetadata } from './lib/cncMetadata'
 import { useSelection } from './hooks/useSelection'
 import { useEditorStore } from './store'
 import type { CanvasNode, CncMetadata, GroupNode, PathNode } from './types/editor'
@@ -79,7 +80,7 @@ function SvgPathNode({
   onDragEnd,
 }: SharedShapeProps & { node: PathNode }) {
   const cncOverrides = showCncOverrides !== false
-    ? getCncVisualOverrides(node.cncMetadata, parentCncMetadata)
+    ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
     : {}
   const isOpenPath = toolDiameter != null && isOpenPathNode(node)
   const useCncStroke = isOpenPath && showCncOverrides !== false
@@ -302,7 +303,7 @@ export function ShapeRenderer({
             interactionBlocked={interactionBlocked}
             showCncOverrides={showCncOverrides}
             outlineOnly={outlineOnly}
-            parentCncMetadata={groupNode.cncMetadata}
+            parentCncMetadata={mergeCncMetadata(groupNode.cncMetadata, parentCncMetadata)}
             onNodeDragStart={onNodeDragStart}
             onNodeDragMove={onNodeDragMove}
             onNodeDragEnd={onNodeDragEnd}
@@ -315,7 +316,7 @@ export function ShapeRenderer({
 
   if (node.type === 'rect') {
     const cncOverrides = showCncOverrides
-      ? getCncVisualOverrides(node.cncMetadata, parentCncMetadata)
+      ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
     const visualProps = Object.assign(
       { fill: outlineOnly ? '' : node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
@@ -370,7 +371,7 @@ export function ShapeRenderer({
 
   if (node.type === 'circle') {
     const cncOverrides = showCncOverrides
-      ? getCncVisualOverrides(node.cncMetadata, parentCncMetadata)
+      ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
     const visualProps = Object.assign(
       { fill: node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
@@ -422,7 +423,7 @@ export function ShapeRenderer({
 
   if (node.type === 'line') {
     const cncOverrides = showCncOverrides
-      ? getCncVisualOverrides(node.cncMetadata, parentCncMetadata)
+      ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
     const isOpenPath = toolDiameter != null && isOpenPathNode(node)
     const useCncStroke = isOpenPath && showCncOverrides

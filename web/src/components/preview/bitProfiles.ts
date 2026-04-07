@@ -48,10 +48,12 @@ function extrudeFlat(
 }
 
 /**
- * Ball bit: flat walls above + hemisphere bottom using negative bevel.
+ * Ball bit: flat walls above + hemisphere bottom using ExtrudeGeometry bevel.
  *
- * THREE.js ExtrudeGeometry bevel with negative bevelSize creates a
- * quarter-circle inward profile — exactly a hemisphere cross-section.
+ * Three.js bevel uses a quarter-circle (cos/sin) profile which is
+ * mathematically identical to a hemisphere cross-section:
+ *   bevel: Z = R·cos(θ), inset = R·sin(θ)
+ *   hemisphere: Z = √(R² - inset²) = R·cos(θ) when inset = R·sin(θ)
  */
 function extrudeBall(
   shape: THREE.Shape,
@@ -77,20 +79,25 @@ function extrudeBall(
     group.add(new THREE.Mesh(wallGeo, material))
   }
 
-  // Bottom hemisphere via negative bevel
+  // Hemisphere bottom using bevel — smooth quarter-circle profile
+  // With depth=0, bevel creates symmetric geometry:
+  //   Front bevel: Z = -effectiveRadius to 0 (inset → full)  ← hemisphere
+  //   Back bevel:  Z = 0 to +effectiveRadius (full → inset)  ← hidden inside wall
   const hemiGeo = new THREE.ExtrudeGeometry(shape, {
-    depth: 0.001,
+    depth: 0,
     bevelEnabled: true,
     bevelThickness: effectiveRadius,
-    bevelSize: -effectiveRadius,
-    bevelSegments: 6,
+    bevelSize: effectiveRadius,
+    bevelSegments: 8,
     curveSegments: 28,
   })
-  // Position so the top of the hemisphere meets the bottom of the walls
-  // ExtrudeGeometry with bevel extends from -bevelThickness to depth+bevelThickness
-  // We want the top (z = bevelThickness) to align with z = -wallHeight
-  hemiGeo.translate(0, 0, -wallHeight - effectiveRadius)
+  // Position so hemisphere spans from -depth to -wallHeight
+  hemiGeo.translate(0, 0, -wallHeight)
   group.add(new THREE.Mesh(hemiGeo, material))
+
+  if (group.children.length === 0) {
+    return extrudeFlat(shape, depth, radius, color, depthWrite)
+  }
 
   return group
 }
@@ -112,15 +119,17 @@ function extrudeVGroove(
   depthWrite: boolean,
 ): THREE.Object3D {
   const tanHalf = Math.tan(V_HALF_ANGLE_RAD)
-  const layerCount = 3
+  const layerCount = 8
   const layerThickness = depth / layerCount
 
   const group = new THREE.Group()
   const material = makeMaterial(color, depthWrite)
 
   for (let i = 0; i < layerCount; i++) {
+    const layerTop = i * layerThickness
     const layerBottom = (i + 1) * layerThickness
-    const insetAmount = layerBottom / tanHalf
+    // Inset based on top of layer so surface layer stays at full width
+    const insetAmount = layerTop / tanHalf
 
     let layerShapes: THREE.Shape[]
     if (insetAmount < 0.01) {

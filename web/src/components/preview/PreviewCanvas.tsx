@@ -9,7 +9,6 @@ import { clearGroup, createLighting, createGrid, createToolMarker, createActiveP
 import { createStockMeshLayers } from './stockMesh'
 import { createMergedSweepMeshes } from './sweepMesh'
 import { buildToolpathLines, updateDrawRange, type ToolpathLineData } from './toolpathLines'
-import type { ToolpathGroup, StockBounds } from '../../types/preview'
 import type { ToolMarker } from './sceneHelpers'
 
 export function PreviewCanvas() {
@@ -24,7 +23,7 @@ export function PreviewCanvas() {
   const showRapidMoves = useEditorStore((s) => s.preview.showRapidMoves)
   const showSvgOverlay = useEditorStore((s) => s.preview.showSvgOverlay)
   const materialPreset = useEditorStore((s) => s.preview.materialPreset)
-  const toolShape = useEditorStore((s) => s.machiningSettings.toolShape)
+  const previewToolShape = useEditorStore((s) => s.preview.toolShape)
 
   const [stockTexture, setStockTexture] = useState<THREE.Texture | null>(null)
 
@@ -79,7 +78,10 @@ export function PreviewCanvas() {
 
     clearGroup(state.toolMarkerGroup)
 
-    const marker = createToolMarker(previewSnapshot.tool_diameter / 2)
+    const marker = createToolMarker(
+      previewSnapshot.tool_diameter / 2,
+      previewToolShape ?? 'Flat',
+    )
     state.toolMarkerGroup.add(marker.group)
     toolMarkerRef.current = marker
 
@@ -88,7 +90,7 @@ export function PreviewCanvas() {
     activePathLineRef.current = activeLine
 
     requestRender()
-  }, [sceneRef, previewSnapshot, requestRender])
+  }, [sceneRef, previewSnapshot, previewToolShape, requestRender])
 
   // Build stock/sweep meshes when toolpaths change
   useEffect(() => {
@@ -102,15 +104,17 @@ export function PreviewCanvas() {
       stockBounds,
       toolpaths,
       previewSnapshot.material_thickness,
+      previewToolShape ?? 'Flat',
+      previewSnapshot.tool_diameter / 2,
       stockTexture ?? undefined,
     )
     state.stockGroup.add(stockMesh)
 
-    const sweepMesh = createMergedSweepMeshes(toolpaths, toolShape)
+    const sweepMesh = createMergedSweepMeshes(toolpaths, previewToolShape ?? undefined)
     state.sweepGroup.add(sweepMesh)
 
     requestRender()
-  }, [sceneRef, toolpaths, stockBounds, previewSnapshot, stockTexture, toolShape, requestRender])
+  }, [sceneRef, toolpaths, stockBounds, previewSnapshot, stockTexture, previewToolShape, requestRender])
 
   // Auto-fit camera to toolpath bounding box when GCode is generated
   useEffect(() => {
@@ -221,7 +225,7 @@ export function PreviewCanvas() {
         const sample = sampleProgramAtDistance(preview.parsedProgram, preview.playbackDistance)
         const marker = toolMarkerRef.current
 
-        if (sample.segment && preview.playbackDistance > 0) {
+        if (sample.segment) {
           marker.group.visible = true
           marker.group.position.set(sample.position.x, sample.position.y, sample.position.z)
         } else {

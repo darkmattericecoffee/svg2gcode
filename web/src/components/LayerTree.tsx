@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, ButtonGroup, Dropdown, Input } from '@heroui/react'
 import { ChevronDown, ChevronRight } from '@gravity-ui/icons'
 
+import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
 import { depthToColor } from '../lib/cncVisuals'
 import { useEditorStore } from '../store'
@@ -198,8 +199,9 @@ export function LayerTree({
               const childCount = isGroup ? (node as GroupNode).childIds.length : 0
               const selected = selectedIds.includes(id)
               const isCollapsed = collapsed[id] ?? false
-              const cncColor = node.cncMetadata?.cutDepth != null
-                ? depthToColor(node.cncMetadata.cutDepth)
+              const effectiveCncMetadata = resolveNodeCncMetadata(node, nodesById)
+              const cncColor = effectiveCncMetadata.cutDepth != null
+                ? depthToColor(effectiveCncMetadata.cutDepth)
                 : null
 
               return (
@@ -381,8 +383,9 @@ function TreeNode({
 
   if (!matchesSelf && !hasMatchingChildren) return null
 
-  const cncColor = node.cncMetadata?.cutDepth != null
-    ? depthToColor(node.cncMetadata.cutDepth)
+  const effectiveCncMetadata = resolveNodeCncMetadata(node, nodesById)
+  const cncColor = effectiveCncMetadata.cutDepth != null
+    ? depthToColor(effectiveCncMetadata.cutDepth)
     : null
 
   return (

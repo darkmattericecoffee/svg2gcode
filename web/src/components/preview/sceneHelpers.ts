@@ -4,6 +4,7 @@
  */
 
 import * as THREE from 'three'
+import type { RouterBitShape } from '../../types/editor'
 
 export function disposeMaterial(material: THREE.Material | THREE.Material[]): void {
   if (Array.isArray(material)) {
@@ -65,13 +66,69 @@ export function createGrid(materialWidth: number, materialHeight: number): THREE
 
 export interface ToolMarker {
   group: THREE.Group
+  body: THREE.Object3D
   circle: THREE.Mesh
   line: THREE.Line
 }
 
-export function createToolMarker(toolRadius: number): ToolMarker {
+function createToolMaterial(): THREE.MeshPhongMaterial {
+  return new THREE.MeshPhongMaterial({
+    color: 0xffd166,
+    emissive: 0x5a4311,
+    transparent: true,
+    opacity: 0.84,
+    shininess: 90,
+  })
+}
+
+function createLathedToolProfile(
+  toolRadius: number,
+  toolShape: RouterBitShape,
+): THREE.Object3D {
+  const fluteLength = Math.max(toolRadius * 5, 10)
+  const shaftRadius = Math.max(toolRadius * 0.42, 0.35)
+  const points: THREE.Vector2[] = [new THREE.Vector2(0, 0)]
+
+  if (toolShape === 'Ball') {
+    const arcSegments = 10
+    for (let i = 1; i <= arcSegments; i++) {
+      const t = i / arcSegments
+      const angle = (Math.PI / 2) * t
+      points.push(
+        new THREE.Vector2(
+          Math.sin(angle) * toolRadius,
+          toolRadius - Math.cos(angle) * toolRadius,
+        ),
+      )
+    }
+  } else if (toolShape === 'V') {
+    const tipHeight = Math.max(toolRadius, 1)
+    points.push(new THREE.Vector2(toolRadius, tipHeight))
+  } else {
+    points.push(new THREE.Vector2(toolRadius, 0))
+  }
+
+  points.push(new THREE.Vector2(toolRadius, fluteLength))
+  points.push(new THREE.Vector2(shaftRadius, fluteLength + toolRadius * 1.8))
+  points.push(new THREE.Vector2(shaftRadius, fluteLength + toolRadius * 4))
+  points.push(new THREE.Vector2(0, fluteLength + toolRadius * 4))
+
+  const geometry = new THREE.LatheGeometry(points, 32)
+  geometry.rotateX(Math.PI / 2)
+  geometry.computeVertexNormals()
+
+  return new THREE.Mesh(geometry, createToolMaterial())
+}
+
+export function createToolMarker(
+  toolRadius: number,
+  toolShape: RouterBitShape = 'Flat',
+): ToolMarker {
   const group = new THREE.Group()
   group.visible = false
+
+  const body = createLathedToolProfile(toolRadius, toolShape)
+  group.add(body)
 
   const circleGeo = new THREE.CircleGeometry(1, 32)
   const circleMat = new THREE.MeshBasicMaterial({
@@ -97,7 +154,7 @@ export function createToolMarker(toolRadius: number): ToolMarker {
   const line = new THREE.Line(lineGeo, lineMat)
   group.add(line)
 
-  return { group, circle, line }
+  return { group, body, circle, line }
 }
 
 export function createActivePathLine(): THREE.Line {

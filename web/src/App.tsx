@@ -17,6 +17,7 @@ import { exportProjectSVG } from './lib/svgExport'
 import { DEFAULT_MATERIAL, MATERIAL_PRESETS } from './lib/materialPresets'
 import type { MaterialPreset } from './lib/materialPresets'
 import { useEditorStore } from './store'
+import { insertTabs } from './lib/gcodeTabInsertion'
 import type { ViewMode } from './types/preview'
 
 type InspectorTab = 'design' | 'material'
@@ -139,9 +140,19 @@ function App() {
   }
 
   const handleDownloadGcode = () => {
-    // Use the store's gcodeText (which includes tab post-processing) if available
-    const gcodeText = useEditorStore.getState().preview.gcodeText
-    const text = gcodeText ?? gcode.result?.gcode
+    const state = useEditorStore.getState()
+    const { machiningSettings, artboard: ab } = state
+    // Prefer preview gcodeText (already has tabs). Fall back to raw gcode with
+    // tab insertion applied on the fly so tabs are never silently omitted.
+    let text = state.preview.gcodeText ?? gcode.result?.gcode
+    if (text && !state.preview.gcodeText && machiningSettings.tabsEnabled) {
+      text = insertTabs(text, {
+        materialThickness: ab.thickness,
+        tabWidth: machiningSettings.tabWidth,
+        tabHeight: machiningSettings.tabHeight,
+        tabSpacing: machiningSettings.tabSpacing,
+      })
+    }
     if (text) {
       gcode.downloadGcode(text, `${projectName || 'output'}.gcode`)
     }
