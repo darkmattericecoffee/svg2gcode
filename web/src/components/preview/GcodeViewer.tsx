@@ -7,8 +7,6 @@ export function GcodeViewer() {
   const gcodeText = useEditorStore((s) => s.preview.gcodeText)
   const parsedProgram = useEditorStore((s) => s.preview.parsedProgram)
   const playbackDistance = useEditorStore((s) => s.preview.playbackDistance)
-  const setViewMode = useEditorStore((s) => s.setViewMode)
-
   const scrollRef = useRef<HTMLDivElement>(null)
   const activeLineRef = useRef<HTMLDivElement>(null)
 
@@ -30,15 +28,8 @@ export function GcodeViewer() {
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex items-center border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">GCode Preview</h2>
-        <button
-          type="button"
-          className="rounded-md border border-border bg-content1 px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-          onClick={() => setViewMode('design')}
-        >
-          Back to Design
-        </button>
       </div>
 
       {/* Stats */}

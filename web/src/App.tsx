@@ -4,7 +4,6 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 
 import { Label, ProgressBar } from '@heroui/react'
 import { Canvas } from './Canvas'
-import { GenerateGcodePanel } from './components/GenerateGcodePanel'
 import { LayerTree } from './components/LayerTree'
 import { StudioInspector } from './components/StudioInspector'
 import { TopBar } from './components/TopBar'
@@ -86,11 +85,15 @@ function App() {
         if (meta.artboard) setArtboardSize(meta.artboard)
         if (meta.machiningSettings) setMachiningSettings(meta.machiningSettings)
         if (meta.materialPreset) handleMaterialChange(meta.materialPreset as MaterialPreset)
+      } else {
+        // Use the SVG filename (without extension) as the project name
+        const baseName = file.name.replace(/\.[^.]+$/, '')
+        if (baseName) setProjectName(baseName)
       }
 
       if (autoPlace) {
         stagePendingImport(pendingScene)
-        placePendingImport({ x: 0, y: 0 })
+        placePendingImport({ x: 0, y: Math.max(0, artboard.height - pendingScene.height) })
       } else {
         stagePendingImport(pendingScene)
       }
@@ -132,13 +135,7 @@ function App() {
   }
 
   const handleGenerateGcode = async () => {
-    const result = await gcode.generate()
-    if (result) {
-      setImportStatus({
-        tone: 'success',
-        message: `GCode generated: ${result.gcode.split('\n').length.toLocaleString()} lines`,
-      })
-    }
+    await gcode.generate()
   }
 
   const handleDownloadGcode = () => {
@@ -208,7 +205,6 @@ function App() {
                 onProjectNameChange={setProjectName}
                 onImportSvg={() => fileInputRef.current?.click()}
                 onExportProject={handleProjectExport}
-                onSelectMaterial={handleSelectMaterial}
               />
             )}
           </div>
@@ -227,16 +223,10 @@ function App() {
               isGenerating={gcode.isGenerating}
               progress={gcode.progress}
               hasGcodeResult={!!gcode.result}
+              gcodeResult={gcode.result}
+              gcodeError={gcode.error}
+              onDismissGcode={gcode.reset}
             />
-            {!isPreview3d && !isInitializingPreview && (gcode.result || gcode.error) && (
-              <div className="pointer-events-none absolute inset-x-0 top-24 z-30 flex justify-center px-4">
-                <GenerateGcodePanel
-                  state={gcode}
-                  onDownload={handleDownloadGcode}
-                  onDismiss={gcode.reset}
-                />
-              </div>
-            )}
             <div className="min-h-0 flex-1 relative">
               {isInitializingPreview ? (
                 <div className="flex h-full items-center justify-center bg-[#232323]">

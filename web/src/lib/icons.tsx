@@ -9,6 +9,7 @@ import ArrowUpFromSquareIcon from '@gravity-ui/icons/esm/ArrowUpFromSquare.js'
 import CircleXmarkIcon from '@gravity-ui/icons/esm/CircleXmark.js'
 import EyeIcon from '@gravity-ui/icons/esm/Eye.js'
 import EyeSlashIcon from '@gravity-ui/icons/esm/EyeSlash.js'
+import FileArrowDownIcon from '@gravity-ui/icons/esm/FileArrowDown.js'
 import FileArrowUpIcon from '@gravity-ui/icons/esm/FileArrowUp.js'
 import HandIcon from '@gravity-ui/icons/esm/Hand.js'
 import HandPointUpIcon from '@gravity-ui/icons/esm/HandPointUp.js'
@@ -57,6 +58,7 @@ export const Icons = {
   export: ArrowUpFromSquareIcon,
   eye: EyeIcon,
   eyeOff: EyeSlashIcon,
+  fileArrowDown: FileArrowDownIcon,
   fileUpload: FileArrowUpIcon,
   fit: SquareDashedIcon,
   hand: HandIcon,

@@ -22,7 +22,6 @@ interface LayerTreeProps {
   onProjectNameChange: (name: string) => void
   onImportSvg: () => void
   onExportProject: () => void
-  onSelectMaterial: () => void
 }
 
 export function LayerTree({
@@ -30,7 +29,6 @@ export function LayerTree({
   onProjectNameChange,
   onImportSvg,
   onExportProject,
-  onSelectMaterial,
 }: LayerTreeProps) {
   const nodesById = useEditorStore((s) => s.nodesById)
   const rootIds = useEditorStore((s) => s.rootIds)
@@ -50,11 +48,8 @@ export function LayerTree({
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <div className="border-b border-border px-4 py-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center">
           <div className="text-xl font-bold text-foreground">Engrav Studio</div>
-          <Button isIconOnly size="sm" variant="secondary" onPress={onSelectMaterial}>
-            <AppIcon icon={Icons.layers} className="h-4 w-4" />
-          </Button>
         </div>
 
         <Input
@@ -72,13 +67,14 @@ export function LayerTree({
           <Dropdown>
             <Button isIconOnly aria-label="More options">
               <ButtonGroup.Separator />
-              <AppIcon icon={Icons.chevronDown} className="h-3.5 w-3.5" />
+              <AppIcon icon={Icons.fileArrowDown} className="h-4 w-4" />
             </Button>
             <Dropdown.Popover placement="bottom end">
               <Dropdown.Menu onAction={(key) => {
                 if (key === 'export-project') onExportProject()
               }}>
                 <Dropdown.Item id="export-project">
+                  <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4" />
                   Export Project
                 </Dropdown.Item>
               </Dropdown.Menu>

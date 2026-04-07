@@ -1,5 +1,5 @@
 import { Button, Label, ProgressBar } from '@heroui/react'
-import type { JobProgress } from '@svg2gcode/bridge'
+import type { JobProgress, GenerateJobResponse } from '@svg2gcode/bridge'
 import ArrowDownToSquareIcon from '@gravity-ui/icons/esm/ArrowDownToSquare.js'
 import SparklesIcon from '@gravity-ui/icons/esm/Sparkles.js'
 
@@ -14,6 +14,9 @@ interface TopBarProps {
   isGenerating?: boolean
   progress?: JobProgress | null
   hasGcodeResult?: boolean
+  gcodeResult?: GenerateJobResponse | null
+  gcodeError?: string | null
+  onDismissGcode?: () => void
 }
 
 function progressLabel(progress: JobProgress | null | undefined): string {
@@ -62,15 +65,19 @@ export function TopBar({
   isGenerating,
   progress,
   hasGcodeResult,
+  gcodeResult,
+  gcodeError,
+  onDismissGcode,
 }: TopBarProps) {
   const percent = progressPercent(progress)
+  const isExpanded = isGenerating || !!gcodeResult || !!gcodeError
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center px-4">
       <div className="pointer-events-auto inline-flex flex-col rounded-[1.75rem] border border-white/10 bg-[rgba(19,19,23,0.9)] px-3 py-3 text-white shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl transition-all duration-300">
         <div className="flex min-h-10 items-center gap-3">
 
-          {/* Tabs: Design / 2D View / 3D View */}
+          {/* Tabs: Design / Preview / 3D CNC */}
           <div className="flex h-10 items-center rounded-[1.2rem] bg-[#27272A] px-1">
             <button
               type="button"
@@ -92,7 +99,7 @@ export function TopBar({
               }`}
               onClick={() => onViewModeChange('preview2d')}
             >
-              2D View
+              2D
             </button>
             <button
               type="button"
@@ -109,7 +116,7 @@ export function TopBar({
                 }
               }}
             >
-              3D View
+              3D
             </button>
           </div>
 
@@ -121,7 +128,7 @@ export function TopBar({
             onPress={onGenerateGcode}
           >
             <AppIcon icon={SparklesIcon} className="h-4 w-4" />
-            GCode
+            Make GCode
           </Button>
           <Button
             className="rounded-full bg-emerald-600 px-3 gap-1.5 text-[14px] font-medium text-white hover:bg-emerald-500 disabled:bg-emerald-900/40 disabled:text-white/35"
@@ -134,17 +141,66 @@ export function TopBar({
           </Button>
         </div>
 
-        {isGenerating && (
+        {/* Expandable status area */}
+        {isExpanded && (
           <div className="mt-3 border-t border-white/10 pt-3">
-            <ProgressBar aria-label="GCode generation progress" className="w-full" value={percent}>
-              <div className="mb-2 flex items-center justify-between gap-4 text-sm">
-                <Label className="text-sm font-medium text-white">{progressLabel(progress)}</Label>
-                <ProgressBar.Output className="text-xs text-white/60" />
+            {isGenerating && (
+              <ProgressBar aria-label="GCode generation progress" className="w-full" value={percent}>
+                <div className="mb-2 flex items-center justify-between gap-4 text-sm">
+                  <Label className="text-sm font-medium text-white">{progressLabel(progress)}</Label>
+                  <ProgressBar.Output className="text-xs text-white/60" />
+                </div>
+                <ProgressBar.Track className="h-2 overflow-hidden rounded-full bg-white/10">
+                  <ProgressBar.Fill className="rounded-full bg-emerald-500 transition-all duration-300" />
+                </ProgressBar.Track>
+              </ProgressBar>
+            )}
+
+            {!isGenerating && gcodeResult && (
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-1.5 min-w-0">
+                  <p className="text-sm font-medium text-emerald-400">GCode generated</p>
+                  <p className="text-xs text-white/50">
+                    {gcodeResult.gcode.split('\n').length.toLocaleString()} lines
+                    {' · '}
+                    {gcodeResult.operation_ranges.length} operation{gcodeResult.operation_ranges.length !== 1 ? 's' : ''}
+                  </p>
+                  {gcodeResult.warnings.length > 0 && (
+                    <div className="mt-1 rounded-lg bg-yellow-500/10 px-2.5 py-2">
+                      <p className="mb-0.5 text-xs font-medium text-yellow-400">Warnings</p>
+                      {gcodeResult.warnings.map((w, i) => (
+                        <p key={i} className="text-xs text-yellow-200/70">{w}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  className="shrink-0 rounded-full text-[13px] text-white"
+                  variant="secondary"
+                  onPress={onDismissGcode}
+                >
+                  Dismiss
+                </Button>
               </div>
-              <ProgressBar.Track className="h-2 overflow-hidden rounded-full bg-white/10">
-                <ProgressBar.Fill className="rounded-full bg-emerald-500 transition-all duration-300" />
-              </ProgressBar.Track>
-            </ProgressBar>
+            )}
+
+            {!isGenerating && gcodeError && (
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex flex-col gap-1">
+                  <p className="text-sm font-medium text-red-400">Generation failed</p>
+                  <p className="text-xs text-white/50">{gcodeError}</p>
+                </div>
+                <Button
+                  size="sm"
+                  className="shrink-0 rounded-full text-[13px] text-white"
+                  variant="secondary"
+                  onPress={onDismissGcode}
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>

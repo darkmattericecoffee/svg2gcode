@@ -181,8 +181,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   clipboard: null,
   history: { past: [], future: [] },
   artboard: {
-    width: 960,
-    height: 640,
+    width: 600,
+    height: 500,
     thickness: 18,
     x: 0,
     y: 0,
