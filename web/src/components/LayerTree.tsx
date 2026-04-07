@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, ButtonGroup, Dropdown, Input } from '@heroui/react'
+import { Button, ButtonGroup, Description, Dropdown, Input, Label, SearchField } from '@heroui/react'
 import { ChevronDown, ChevronRight } from '@gravity-ui/icons'
 
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
@@ -145,27 +145,31 @@ export function LayerTree({
 
         <Input
           aria-label="Project name"
-          className="mt-4"
+          className="mt-4 w-full max-w-none"
           value={projectName}
           onChange={(e) => onProjectNameChange(e.target.value)}
         />
 
         <ButtonGroup className="mt-4 w-full" variant="secondary">
-          <Button className="flex-1 justify-start" onPress={onImportSvg}>
-            <AppIcon icon={Icons.fileUpload} className="h-4 w-4" />
+          <Button className="flex-1 justify-start text-foreground" onPress={onImportSvg}>
+            <AppIcon icon={Icons.fileUpload} className="h-4 w-4 text-foreground" />
             Import SVG
           </Button>
           <Dropdown>
-            <Button isIconOnly aria-label="More options">
+            <Button
+              isIconOnly
+              aria-label="More options"
+              className="bg-[var(--surface)] text-foreground hover:bg-[var(--surface-secondary)]"
+            >
               <ButtonGroup.Separator />
-              <AppIcon icon={Icons.fileArrowDown} className="h-4 w-4" />
+              <AppIcon icon={Icons.fileArrowDown} className="h-4 w-4 text-foreground" />
             </Button>
             <Dropdown.Popover placement="bottom end">
               <Dropdown.Menu onAction={(key) => {
                 if (key === 'export-project') onExportProject()
               }}>
                 <Dropdown.Item id="export-project">
-                  <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4" />
+                  <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4 text-foreground" />
                   Export Project
                 </Dropdown.Item>
               </Dropdown.Menu>
@@ -175,12 +179,33 @@ export function LayerTree({
       </div>
 
       <div className="border-b border-border px-4 py-3">
-        <Input
-          aria-label="Search layers"
-          placeholder="Search art objects and layers"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <SearchField value={query} onChange={setQuery} fullWidth>
+          <Label>Search Layers</Label>
+          <SearchField.Group>
+            <SearchField.SearchIcon>
+              <svg height="16" viewBox="0 0 16 16" width="16" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  clipRule="evenodd"
+                  d="M12.5 4c0 .174-.071.513-.885.888S9.538 5.5 8 5.5s-2.799-.237-3.615-.612C3.57 4.513 3.5 4.174 3.5 4s.071-.513.885-.888S6.462 2.5 8 2.5s2.799.237 3.615.612c.814.375.885.714.885.888m-1.448 2.66C10.158 6.888 9.115 7 8 7s-2.158-.113-3.052-.34l1.98 2.905c.21.308.322.672.322 1.044v3.37q.088.02.25.021c.422 0 .749-.14.95-.316c.185-.162.3-.38.3-.684v-2.39c0-.373.112-.737.322-1.045zM8 1c3.314 0 6 1 6 3a3.24 3.24 0 0 1-.563 1.826l-3.125 4.584a.35.35 0 0 0-.062.2V13c0 1.5-1.25 2.5-2.75 2.5s-1.75-1-1.75-1v-3.89a.35.35 0 0 0-.061-.2L2.563 5.826A3.24 3.24 0 0 1 2 4c0-2 2.686-3 6-3m-.88 12.936q-.015-.008-.013-.01z"
+                  fill="currentColor"
+                  fillRule="evenodd"
+                />
+              </svg>
+            </SearchField.SearchIcon>
+            <SearchField.Input className="w-full" placeholder="Search art objects and layers" />
+            <SearchField.ClearButton>
+              <svg height="16" viewBox="0 0 16 16" width="16" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  clipRule="evenodd"
+                  d="M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14M6.53 5.47a.75.75 0 0 0-1.06 1.06L6.94 8L5.47 9.47a.75.75 0 1 0 1.06 1.06L8 9.06l1.47 1.47a.75.75 0 1 0 1.06-1.06L9.06 8l1.47-1.47a.75.75 0 1 0-1.06-1.06L8 6.94z"
+                  fill="currentColor"
+                  fillRule="evenodd"
+                />
+              </svg>
+            </SearchField.ClearButton>
+          </SearchField.Group>
+          <Description>Filter art objects and layer names</Description>
+        </SearchField>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
