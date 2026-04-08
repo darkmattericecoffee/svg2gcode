@@ -29,7 +29,7 @@ export function isOpenPathNode(node: CanvasNode): boolean {
   if (node.type === 'path') return !node.fill
   return false
 }
-export type NormalizedEngraveType = 'contour' | 'pocket'
+export type NormalizedEngraveType = 'contour' | 'pocket' | 'plunge'
 
 export interface CncVisualOverrides {
   stroke?: string
@@ -55,6 +55,7 @@ export function normalizeEngraveType(type?: EngraveType): NormalizedEngraveType 
     return undefined
   }
 
+  if (type === 'plunge') return 'plunge'
   return type === 'pocket' || type === 'raster' ? 'pocket' : 'contour'
 }
 
@@ -79,9 +80,18 @@ export function getCncVisualOverrides(
   if (cutDepth === undefined || cutDepth === null) return {}
 
   const ratio = Math.min(1, Math.max(0, cutDepth / MAX_CUT_DEPTH))
-  const type = isOpenPathNode(node)
-    ? 'contour'
-    : resolveEngraveType(engraveType, 'contour')
+  const type = engraveType === 'plunge'
+    ? 'plunge' as const
+    : isOpenPathNode(node)
+      ? 'contour'
+      : resolveEngraveType(engraveType, 'contour')
+
+  if (type === 'plunge') {
+    return {
+      fill: `rgba(60, 130, 240, ${(0.35 + ratio * 0.45).toFixed(2)})`,
+      stroke: depthToColor(cutDepth),
+    }
+  }
 
   if (type === 'pocket') {
     const fillAlpha = 0.30 + ratio * 0.65

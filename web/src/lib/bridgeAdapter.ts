@@ -127,8 +127,9 @@ function getSvgTextForNode(
   nodesById: Record<string, CanvasNode>,
   artboard: ArtboardState,
 ): string | null {
-  // Prefer the stored original SVG from import
-  if (isGroupNode(node) && node.originalSvg) {
+  // Prefer the stored original SVG from import (but not for generator groups —
+  // those need per-child export so each shape becomes a separate operation)
+  if (isGroupNode(node) && node.originalSvg && !(node as GroupNode).generatorMetadata) {
     return node.originalSvg
   }
 
@@ -159,6 +160,10 @@ function resolveDefaultEngraveType(node: CanvasNode): BridgeEngraveType {
   }
   if (engraveType === "contour") {
     return "outline"
+  }
+  // 'plunge' maps to pocket — tiny circles will produce a plunge-like operation
+  if (engraveType === "plunge") {
+    return "pocket"
   }
   return "pocket"
 }
@@ -235,7 +240,7 @@ function collectLeafCncMetadata(
   let bridgeType: BridgeEngraveType | null = null
   if (editorType === "contour" || editorType === "outline") {
     bridgeType = "outline"
-  } else if (editorType === "pocket") {
+  } else if (editorType === "pocket" || editorType === "plunge") {
     bridgeType = "pocket"
   }
 

@@ -63,6 +63,22 @@ function cncDataAttrs(node: CanvasNode): string {
   return out
 }
 
+function renderHintAttrs(node: CanvasNode): string {
+  const renderHint = node.renderHint
+  if (!renderHint) return ''
+
+  if (renderHint.kind === 'plungeCircle') {
+    return (
+      attr('data-s2g-render-kind', 'plunge-circle') +
+      attr('data-s2g-render-diameter', renderHint.diameter) +
+      attr('data-s2g-render-center-x', renderHint.centerX) +
+      attr('data-s2g-render-center-y', renderHint.centerY)
+    )
+  }
+
+  return ''
+}
+
 // ─── per-type serializers ─────────────────────────────────────────────────────
 
 function serializeGroup(
@@ -99,6 +115,7 @@ function serializeRect(node: RectNode, indent: string): string {
     optionalAttr('opacity', node.opacity) +
     (transform || '') +
     cncDataAttrs(node) +
+    renderHintAttrs(node) +
     ' />'
   )
 }
@@ -120,6 +137,7 @@ function serializeCircle(node: CircleNode, indent: string): string {
       attr('stroke-width', node.strokeWidth) +
       optionalAttr('opacity', node.opacity) +
       cncDataAttrs(node) +
+      renderHintAttrs(node) +
       ` />\n${indent}</g>`
     )
   }
@@ -134,6 +152,7 @@ function serializeCircle(node: CircleNode, indent: string): string {
     attr('stroke-width', node.strokeWidth) +
     optionalAttr('opacity', node.opacity) +
     cncDataAttrs(node) +
+    renderHintAttrs(node) +
     ' />'
   )
 }
@@ -160,6 +179,7 @@ function serializeLine(node: LineNode, indent: string): string {
     optionalAttr('opacity', node.opacity) +
     (transform || '') +
     cncDataAttrs(node) +
+    renderHintAttrs(node) +
     ' />'
   )
 }
@@ -176,6 +196,7 @@ function serializePath(node: PathNode, indent: string): string {
     optionalAttr('opacity', node.opacity) +
     (transform || '') +
     cncDataAttrs(node) +
+    renderHintAttrs(node) +
     ' />'
   )
 }

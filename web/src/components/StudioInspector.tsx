@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Tabs } from '@heroui/react'
+import { Tabs } from '@heroui/react'
 
 import { getNodeSize } from '../lib/nodeDimensions'
 import { useEditorStore } from '../store'

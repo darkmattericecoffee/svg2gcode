@@ -5,6 +5,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import { Label, ProgressBar } from '@heroui/react'
 import { Canvas } from './Canvas'
 import { LayerTree } from './components/LayerTree'
+import { LibraryPanel } from './components/library/LibraryPanel'
 import { StudioInspector } from './components/StudioInspector'
 import { TopBar } from './components/TopBar'
 import { PreviewCanvas } from './components/preview/PreviewCanvas'
@@ -26,13 +27,14 @@ function App() {
   const artboard = useEditorStore((state) => state.artboard)
   const nodesById = useEditorStore((state) => state.nodesById)
   const rootIds = useEditorStore((state) => state.rootIds)
-  const selectStage = useEditorStore((state) => state.selectStage)
   const stagePendingImport = useEditorStore((state) => state.stagePendingImport)
   const placePendingImport = useEditorStore((state) => state.placePendingImport)
   const setImportStatus = useEditorStore((state) => state.setImportStatus)
   const machiningSettings = useEditorStore((state) => state.machiningSettings)
   const setMachiningSettings = useEditorStore((state) => state.setMachiningSettings)
   const setArtboardSize = useEditorStore((state) => state.setArtboardSize)
+  const leftPanelTab = useEditorStore((state) => state.leftPanelTab)
+  const setLeftPanelTab = useEditorStore((state) => state.setLeftPanelTab)
   const viewMode = useEditorStore((state) => state.preview.viewMode)
   const setViewMode = useEditorStore((state) => state.setViewMode)
   const initPreview = useEditorStore((state) => state.initPreview)
@@ -158,11 +160,6 @@ function App() {
     }
   }
 
-  const handleSelectMaterial = () => {
-    selectStage()
-    setInspectorTab('material')
-  }
-
   const handleMaterialChange = (preset: MaterialPreset) => {
     setMaterialPreset(preset)
     useEditorStore.getState().setMaterialPreset(preset)
@@ -207,16 +204,40 @@ function App() {
       <Group orientation="horizontal" className="flex-1">
         {/* Left sidebar */}
         <Panel defaultSize="20%" minSize="14%" maxSize="30%">
-          <div className="h-full overflow-hidden border-r border-border bg-background">
+          <div className="flex h-full flex-col overflow-hidden border-r border-border bg-background">
             {isPreview3d ? (
               <GcodeViewer />
             ) : (
-              <LayerTree
-                projectName={projectName}
-                onProjectNameChange={setProjectName}
-                onImportSvg={() => fileInputRef.current?.click()}
-                onExportProject={handleProjectExport}
-              />
+              <>
+                {/* Tab strip */}
+                <div className="flex shrink-0 border-b border-border">
+                  <button
+                    className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${leftPanelTab === 'layers' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setLeftPanelTab('layers')}
+                  >
+                    Layers
+                  </button>
+                  <button
+                    className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${leftPanelTab === 'library' ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                    onClick={() => setLeftPanelTab('library')}
+                  >
+                    Library
+                  </button>
+                </div>
+                {/* Panel body */}
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  {leftPanelTab === 'layers' ? (
+                    <LayerTree
+                      projectName={projectName}
+                      onProjectNameChange={setProjectName}
+                      onImportSvg={() => fileInputRef.current?.click()}
+                      onExportProject={handleProjectExport}
+                    />
+                  ) : (
+                    <LibraryPanel />
+                  )}
+                </div>
+              </>
             )}
           </div>
         </Panel>
@@ -263,64 +284,43 @@ function App() {
                 />
               )}
 
-              {/* Empty-state drop zone — only shown when the artboard has no content */}
-              {!isPreview3d && !isPreview2d && isCanvasEmpty && !isDragOver && (
+              {/* Empty-state drop zone */}
+              {!isPreview3d && !isPreview2d && isCanvasEmpty && (
                 <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
                   <div
-                    className="pointer-events-auto flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-border bg-background/80 px-12 py-10 text-center backdrop-blur-sm"
+                    className={`pointer-events-auto relative flex min-w-[500px] max-w-[80%] flex-col items-center gap-4 rounded-2xl border-2 border-dashed px-12 py-10 text-center backdrop-blur-md transition-all duration-220 ease-out ${
+                      isDragOver
+                        ? 'translate-y-0 scale-[1.015] border-white/80 bg-black/78 shadow-[0_18px_36px_rgba(0,0,0,0.36)]'
+                        : 'translate-y-0 scale-100 border-white/65 bg-black/72 shadow-[0_10px_26px_rgba(0,0,0,0.3)]'
+                    }`}
                     onClick={() => fileInputRef.current?.click()}
                     style={{ cursor: 'pointer' }}
                   >
+                    <div className={`pointer-events-none absolute inset-[6px] rounded-[14px] border border-white/25 transition-opacity duration-200 ${isDragOver ? 'opacity-100' : 'opacity-75'}`} />
                     <svg
                       xmlns="http://www.w3.org/2000/svg"
-                      width="40"
-                      height="40"
+                      width={isDragOver ? 38 : 40}
+                      height={isDragOver ? 38 : 40}
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
                       strokeWidth="1.5"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className="text-muted-foreground"
+                      className={`relative transition-colors duration-200 ${isDragOver ? 'text-primary' : 'text-muted-foreground'}`}
                     >
                       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                       <polyline points="17 8 12 3 7 8" />
                       <line x1="12" y1="3" x2="12" y2="15" />
                     </svg>
-                    <div>
+                    <div className="relative">
                       <p className="text-base font-semibold text-foreground">
-                        Import or drag an SVG to begin
+                        {isDragOver ? 'Drop to import SVG' : 'Import or drag an SVG to begin'}
                       </p>
                       <p className="mt-1 text-sm text-muted-foreground">
-                        Drop a file anywhere, or click to browse
+                        {isDragOver ? 'Release to import this file' : 'Drop a file anywhere, or click to browse'}
                       </p>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Drag-over highlight */}
-              {isDragOver && (
-                <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center">
-                  <div className="absolute inset-2 rounded-2xl border-2 border-dashed border-primary bg-primary/5" />
-                  <div className="relative flex flex-col items-center gap-3 rounded-xl bg-background/90 px-10 py-8 text-center shadow-lg backdrop-blur-sm">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="36"
-                      height="36"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="text-primary"
-                    >
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
-                    <p className="text-base font-semibold text-foreground">Drop to import SVG</p>
                   </div>
                 </div>
               )}

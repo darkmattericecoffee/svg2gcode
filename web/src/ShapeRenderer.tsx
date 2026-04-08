@@ -17,6 +17,7 @@ import {
   getEngravePreviewFill,
   getEngravePreviewStroke,
   isOpenPathNode,
+  normalizeEngraveType,
 } from './lib/cncVisuals'
 import { mergeCncMetadata } from './lib/cncMetadata'
 import { useSelection } from './hooks/useSelection'
@@ -111,6 +112,84 @@ function SvgPathNode({
         context.fillShape = origFill
       }
     : undefined
+
+  // Plunge points: render a circle showing the tool diameter footprint
+  const effectiveMeta = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
+  const isPlunge = normalizeEngraveType(effectiveMeta?.engraveType) === 'plunge'
+  const renderHint = node.renderHint?.kind === 'plungeCircle' ? node.renderHint : undefined
+  const plungeDiameter = renderHint?.diameter ?? toolDiameter ?? 0
+  const plungeRadius = plungeDiameter / 2
+  const plungeCenterX = renderHint?.centerX ?? plungeRadius
+  const plungeCenterY = renderHint?.centerY ?? plungeRadius
+
+  if (isPlunge && plungeRadius > 0) {
+    const neutralStroke = isSelected ? '#0d99ff' : 'rgba(74, 52, 30, 0.72)'
+    const neutralFill = outlineOnly ? undefined : (isSelected ? 'rgba(13, 153, 255, 0.14)' : 'rgba(74, 52, 30, 0.16)')
+    const plungeStroke = showCncOverrides !== false
+      ? (visualProps.stroke || '#0d99ff')
+      : neutralStroke
+    const plungeFill = showCncOverrides !== false
+      ? (outlineOnly ? undefined : (visualProps.fill || 'rgba(60, 130, 240, 0.35)'))
+      : neutralFill
+
+    return (
+      <Group
+        ref={(instance) => registerNodeRef(node.id, instance)}
+        id={node.id}
+        x={node.x}
+        y={node.y}
+        rotation={node.rotation}
+        scaleX={node.scaleX}
+        scaleY={node.scaleY}
+        draggable={draggable}
+        visible={node.visible}
+        opacity={opacity}
+        listening={listening}
+        onMouseDown={onPointerDown}
+        onTouchStart={onPointerDown}
+        onClick={onClick}
+        onTap={onClick}
+        onDblClick={onDoubleClick}
+        onDblTap={onDoubleClick}
+        onDragStart={onDragStart}
+        onDragMove={onDragMove}
+        onDragEnd={onDragEnd}
+      >
+        <Circle
+          x={plungeCenterX}
+          y={plungeCenterY}
+          radius={plungeRadius}
+          fill={plungeFill}
+          fillEnabled={Boolean(plungeFill)}
+          stroke={plungeStroke}
+          strokeWidth={isSelected ? 1.5 : 0.5}
+          listening={false}
+        />
+        <Line
+          points={[
+            plungeCenterX - plungeRadius * 0.5,
+            plungeCenterY,
+            plungeCenterX + plungeRadius * 0.5,
+            plungeCenterY,
+          ]}
+          stroke={plungeStroke}
+          strokeWidth={0.3}
+          listening={false}
+        />
+        <Line
+          points={[
+            plungeCenterX,
+            plungeCenterY - plungeRadius * 0.5,
+            plungeCenterX,
+            plungeCenterY + plungeRadius * 0.5,
+          ]}
+          stroke={plungeStroke}
+          strokeWidth={0.3}
+          listening={false}
+        />
+      </Group>
+    )
+  }
 
   return (
     <Path
@@ -318,11 +397,13 @@ export function ShapeRenderer({
     const cncOverrides = showCncOverrides
       ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
-    const visualProps = Object.assign(
+    const visualProps: { fill?: string; stroke?: string; strokeWidth?: number } = Object.assign(
       { fill: outlineOnly ? '' : node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
       cncOverrides,
     )
-    if (outlineOnly) delete visualProps.fill
+    if (outlineOnly) {
+      visualProps.fill = undefined
+    }
     if (commonProps.isSelected && !outlineOnly) {
       visualProps.stroke = '#0d99ff'
       if (!visualProps.strokeWidth) visualProps.strokeWidth = 1.5
@@ -465,8 +546,6 @@ export function ShapeRenderer({
         points={node.points}
         closed={node.closed}
         fillRule={node.fillRule}
-        lineCap={node.lineCap}
-        lineJoin={node.lineJoin}
         rotation={node.rotation}
         scaleX={node.scaleX}
         scaleY={node.scaleY}

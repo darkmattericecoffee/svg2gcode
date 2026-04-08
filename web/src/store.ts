@@ -1,16 +1,22 @@
 import { create } from 'zustand'
 
 import { getSelectableIdsInScope, getSubtreeIds, isGroupNode } from './lib/editorTree'
+import { runGenerator } from './lib/generators'
+import { resolveParamsAgainstTool } from './lib/generators'
+import { getNodeSize } from './lib/nodeDimensions'
+import { importSvgToScene } from './lib/svgImport'
 import type {
   ArtboardState,
   CanvasNode,
-  CanvasNodeBase,
   CncMetadata,
+  GeneratorParams,
+  GroupNode,
   ImportStatus,
   InteractionMode,
   MachiningSettings,
   MarqueeRect,
   PendingSvgImport,
+  RenderHint,
   ViewportState,
 } from './types/editor'
 import { parseGcodeProgram } from '@svg2gcode/bridge/viewer'
@@ -84,6 +90,12 @@ export interface EditorStore {
   placePendingImport: (position: { x: number; y: number }) => void
   setImportStatus: (status: ImportStatus | null) => void
 
+  // Library tab
+  leftPanelTab: 'layers' | 'library'
+  setLeftPanelTab: (tab: 'layers' | 'library') => void
+  placeGenerator: (params: GeneratorParams) => void
+  updateGeneratorParams: (nodeId: string, params: GeneratorParams) => void
+
   // Preview state
   preview: PreviewState
   setViewMode: (mode: ViewMode) => void
@@ -103,6 +115,44 @@ export interface EditorStore {
 
 function generateId(): string {
   return `node-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+}
+
+function buildPlungeCircleRenderHint(
+  node: CanvasNode,
+  nodesById: Record<string, CanvasNode>,
+  diameter: number,
+): RenderHint | undefined {
+  if (node.type === 'group' || diameter <= 0) {
+    return undefined
+  }
+
+  const { baseWidth, baseHeight } = getNodeSize(node, nodesById)
+  if (baseWidth <= 0 || baseHeight <= 0) {
+    return undefined
+  }
+
+  return {
+    kind: 'plungeCircle',
+    diameter,
+    centerX: baseWidth / 2,
+    centerY: baseHeight / 2,
+  }
+}
+
+function applyGeneratorRenderHints(
+  pending: PendingSvgImport,
+  params: GeneratorParams,
+) {
+  if (params.kind !== 'dowelHole' || !params.matchToolDiameter) {
+    return
+  }
+
+  for (const node of Object.values(pending.nodesById)) {
+    const renderHint = buildPlungeCircleRenderHint(node, pending.nodesById, params.diameter)
+    if (renderHint) {
+      node.renderHint = renderHint
+    }
+  }
 }
 
 function cloneSubtree(
@@ -143,25 +193,6 @@ function cloneSubtree(
 
   return { newRootId, clonedNodes }
 }
-
-type BaseNodeDefaults = Pick<
-  CanvasNodeBase,
-  'rotation' | 'scaleX' | 'scaleY' | 'draggable' | 'locked' | 'visible' | 'opacity' | 'parentId'
->
-
-type CanvasNodeSeed = Omit<CanvasNode, keyof BaseNodeDefaults>
-
-const createBaseNode = <T extends CanvasNodeSeed>(node: T): T & BaseNodeDefaults => ({
-  rotation: 0,
-  scaleX: 1,
-  scaleY: 1,
-  draggable: true,
-  locked: false,
-  visible: true,
-  opacity: 1,
-  parentId: null,
-  ...node,
-})
 
 const initialNodes: Record<string, CanvasNode> = {}
 
@@ -216,6 +247,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     importStatus: null,
   },
   hoveredId: null,
+  leftPanelTab: 'layers',
   setHoveredId: (id) => set({ hoveredId: id }),
   setInteractionMode: (mode) => {
     set({ interactionMode: mode })
@@ -582,11 +614,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
 
     const { machiningSettings } = get()
+    const isGenerator = Boolean((rootNode as GroupNode).generatorMetadata)
     const nextRootNode = {
       ...rootNode,
       x: position.x,
       y: position.y,
-      originalSvg: pendingImport.originalSvg,
+      ...(isGenerator ? {} : { originalSvg: pendingImport.originalSvg }),
       cncMetadata: {
         ...rootNode.cncMetadata,
         cutDepth: rootNode.cncMetadata?.cutDepth ?? machiningSettings.defaultDepthMm,
@@ -621,6 +654,103 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         importStatus,
       },
     }))
+  },
+
+  // Library tab
+  setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
+
+  placeGenerator: (params) => {
+    const { artboard, machiningSettings } = get()
+    const resolved = resolveParamsAgainstTool(params, machiningSettings)
+    const svgText = runGenerator(resolved)
+    const pending = importSvgToScene({
+      artboardWidth: artboard.width,
+      artboardHeight: artboard.height,
+      fileName: resolved.name,
+      svgText,
+    })
+    applyGeneratorRenderHints(pending, resolved)
+    // Determine effective engraveType:
+    // - matchToolWidth tenons use lines → always contour
+    // - matchToolDiameter dowels are drill points → plunge
+    // - otherwise use the outputType from params
+    let engraveType = resolved.outputType as string
+    if (resolved.kind === 'tenon' && resolved.matchToolWidth) {
+      engraveType = 'contour'
+    } else if (resolved.kind === 'dowelHole' && resolved.matchToolDiameter) {
+      engraveType = 'plunge'
+    }
+    for (const node of Object.values(pending.nodesById)) {
+      node.cncMetadata = { ...node.cncMetadata, engraveType: engraveType as import('./types/editor').EngraveType }
+    }
+    // Stamp generatorMetadata on the root group
+    const rootNode = pending.nodesById[pending.rootId]
+    if (rootNode && rootNode.type === 'group') {
+      ;(rootNode as GroupNode).generatorMetadata = { params: resolved }
+    }
+    get().stagePendingImport(pending)
+  },
+
+  updateGeneratorParams: (nodeId, params) => {
+    const { nodesById, artboard, machiningSettings } = get()
+    const existingNode = nodesById[nodeId]
+    if (!existingNode || existingNode.type !== 'group') return
+
+    get().pushHistory()
+
+    const resolved = resolveParamsAgainstTool(params, machiningSettings)
+    const svgText = runGenerator(resolved)
+    const pending = importSvgToScene({
+      artboardWidth: artboard.width,
+      artboardHeight: artboard.height,
+      fileName: resolved.name,
+      svgText,
+    })
+    applyGeneratorRenderHints(pending, resolved)
+
+    const existingGroup = existingNode as GroupNode
+    const newRootNode = pending.nodesById[pending.rootId]
+    if (!newRootNode || newRootNode.type !== 'group') return
+
+    // Collect old child subtree IDs to remove
+    const oldChildIds = new Set<string>()
+    for (const childId of existingGroup.childIds) {
+      for (const id of getSubtreeIds(childId, nodesById)) {
+        oldChildIds.add(id)
+      }
+    }
+
+    // Determine effective engraveType
+    let engraveType = resolved.outputType as string
+    if (resolved.kind === 'tenon' && resolved.matchToolWidth) {
+      engraveType = 'contour'
+    } else if (resolved.kind === 'dowelHole' && resolved.matchToolDiameter) {
+      engraveType = 'plunge'
+    }
+    const newChildren: Record<string, CanvasNode> = {}
+    for (const [id, node] of Object.entries(pending.nodesById)) {
+      if (id === pending.rootId) continue
+      newChildren[id] = {
+        ...node,
+        parentId: node.parentId === pending.rootId ? nodeId : node.parentId,
+        cncMetadata: { ...node.cncMetadata, engraveType: engraveType as import('./types/editor').EngraveType },
+      }
+    }
+
+    const updatedGroup: GroupNode = {
+      ...existingGroup,
+      childIds: (newRootNode as GroupNode).childIds,
+      generatorMetadata: { params: resolved },
+    }
+
+    const prunedNodes: Record<string, CanvasNode> = {}
+    for (const [id, node] of Object.entries(nodesById)) {
+      if (!oldChildIds.has(id)) prunedNodes[id] = node
+    }
+
+    set({
+      nodesById: { ...prunedNodes, [nodeId]: updatedGroup, ...newChildren },
+    })
   },
 
   // Preview state

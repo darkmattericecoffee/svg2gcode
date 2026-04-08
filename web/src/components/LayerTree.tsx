@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, ButtonGroup, Description, Dropdown, Input, Label, SearchField } from '@heroui/react'
-import { ChevronDown, ChevronRight } from '@gravity-ui/icons'
+import { Button, ButtonGroup, Dropdown, Input, Label, SearchField } from '@heroui/react'
+import { ChevronDown, ChevronRight, Sparkles } from '@gravity-ui/icons'
 
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
@@ -180,7 +180,7 @@ export function LayerTree({
 
       <div className="border-b border-border px-4 py-3">
         <SearchField value={query} onChange={setQuery} fullWidth>
-          <Label>Search Layers</Label>
+          <Label>Layers</Label>
           <SearchField.Group>
             <SearchField.SearchIcon>
               <svg height="16" viewBox="0 0 16 16" width="16" xmlns="http://www.w3.org/2000/svg">
@@ -192,7 +192,7 @@ export function LayerTree({
                 />
               </svg>
             </SearchField.SearchIcon>
-            <SearchField.Input className="w-full" placeholder="Search art objects and layers" />
+            <SearchField.Input className="w-full" placeholder="Filter art objects and layers" />
             <SearchField.ClearButton>
               <svg height="16" viewBox="0 0 16 16" width="16" xmlns="http://www.w3.org/2000/svg">
                 <path
@@ -204,7 +204,6 @@ export function LayerTree({
               </svg>
             </SearchField.ClearButton>
           </SearchField.Group>
-          <Description>Filter art objects and layer names</Description>
         </SearchField>
       </div>
 
@@ -323,6 +322,11 @@ export function LayerTree({
                       >
                         <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3.5 w-3.5" />
                       </span>
+                      {isGroup && (node as GroupNode).generatorMetadata ? (
+                        <span title="Parametric generator" className="text-primary/70">
+                          <Sparkles className="h-3.5 w-3.5" />
+                        </span>
+                      ) : null}
                       <span className="min-w-[3rem] text-right text-xs text-muted-foreground">
                         {isGroup ? `${childCount} parts` : NODE_TYPE_LABEL[node.type]}
                       </span>
@@ -505,6 +509,11 @@ function TreeNode({
           >
             <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3 w-3" />
           </span>
+          {isGroup && (node as GroupNode).generatorMetadata ? (
+            <span title="Parametric generator" className="text-primary/70">
+              <Sparkles className="h-3 w-3" />
+            </span>
+          ) : null}
           <span className="min-w-[2.5rem] text-right text-xs text-muted-foreground">{typeTag}</span>
         </span>
       </button>

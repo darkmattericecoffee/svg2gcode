@@ -12,4 +12,7 @@ export default defineConfig({
     },
   },
   assetsInclude: ['**/*.wasm'],
+  optimizeDeps: {
+    include: ['makerjs'],
+  },
 })

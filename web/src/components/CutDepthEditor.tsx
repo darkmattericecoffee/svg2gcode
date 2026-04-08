@@ -28,10 +28,11 @@ function resolveLeafIds(
   return [...new Set(leafIds)]
 }
 
-const ENGRAVE_TYPES: NormalizedEngraveType[] = ['contour', 'pocket']
+const ENGRAVE_TYPES: NormalizedEngraveType[] = ['contour', 'pocket', 'plunge']
 const ENGRAVE_LABEL: Record<string, string> = {
   contour: 'Contour',
   pocket: 'Pocket',
+  plunge: 'Plunge',
 }
 
 interface SelectionAnalysis {

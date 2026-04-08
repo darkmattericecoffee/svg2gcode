@@ -11,6 +11,7 @@ const ENGRAVE_LABEL: Record<EngraveType, string> = {
   outline: 'Outline',
   pocket: 'Pocket',
   raster: 'Raster',
+  plunge: 'Plunge',
 }
 
 export function CncPropertiesPanel() {

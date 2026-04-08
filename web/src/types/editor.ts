@@ -1,4 +1,5 @@
 export type InteractionMode = 'group' | 'direct'
+export type EyedropperMode = 'off' | 'full' | 'depth-only'
 export type CanvasFillRule = 'nonzero' | 'evenodd'
 
 export type ShapeType = 'group' | 'rect' | 'circle' | 'line' | 'path'
@@ -46,12 +47,21 @@ export interface MarqueeRect {
   height: number
 }
 
-export type EngraveType = 'contour' | 'pocket' | 'outline' | 'raster'
+export type EngraveType = 'contour' | 'pocket' | 'outline' | 'raster' | 'plunge'
 
 export interface CncMetadata {
   cutDepth?: number
   engraveType?: EngraveType
 }
+
+export interface PlungeCircleRenderHint {
+  kind: 'plungeCircle'
+  diameter: number
+  centerX: number
+  centerY: number
+}
+
+export type RenderHint = PlungeCircleRenderHint
 
 export interface CanvasNodeBase {
   id: string
@@ -68,13 +78,53 @@ export interface CanvasNodeBase {
   opacity: number
   parentId: string | null
   cncMetadata?: CncMetadata
+  renderHint?: RenderHint
 }
+
+// ---------- Generator types ----------
+
+export type GeneratorKind = 'tenon' | 'dowelHole'
+
+export interface TenonParams {
+  kind: 'tenon'
+  name: string
+  width: number
+  height: number
+  matchToolWidth: boolean
+  rowCount: number
+  colCount: number
+  rowSpacing: number
+  colSpacing: number
+  outputType: 'contour' | 'pocket'
+}
+
+export interface DowelHoleParams {
+  kind: 'dowelHole'
+  name: string
+  diameter: number
+  matchToolDiameter: boolean
+  rowCount: number
+  colCount: number
+  rowSpacing: number
+  colSpacing: number
+  outputType: 'contour' | 'pocket'
+}
+
+export type GeneratorParams = TenonParams | DowelHoleParams
+
+export interface GeneratorMetadata {
+  params: GeneratorParams
+}
+
+// ---------- Node types ----------
 
 export interface GroupNode extends CanvasNodeBase {
   type: 'group'
   childIds: string[]
   /** Raw SVG source text, stored on imported SVG root groups for bridge processing. */
   originalSvg?: string
+  /** Present when this group was produced by a parametric generator. */
+  generatorMetadata?: GeneratorMetadata
 }
 
 export interface RectNode extends CanvasNodeBase {

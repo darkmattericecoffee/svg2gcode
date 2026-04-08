@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { Circle, Group, Layer, Line, Path, Rect, Stage, Text, Transformer } from 'react-konva'
@@ -102,8 +102,8 @@ function renderOutlineNodeWithAncestors(
   let currentId: string | undefined = targetId
   while (currentId) {
     chain.unshift(currentId)
-    const n = nodesById[currentId]
-    currentId = n?.parentId ?? undefined
+    const currentNode: CanvasNode | undefined = nodesById[currentId]
+    currentId = currentNode?.parentId ?? undefined
   }
 
   function renderChain(remaining: string[]): React.ReactElement | null {
@@ -413,6 +413,15 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     setMarquee(null)
   }
 
+  // When generator params change, the group's children get new IDs. Track this
+  // so the transformer recalculates its bounding box.
+  const selectedChildKey = useMemo(() => {
+    return selectedIds.map((id) => {
+      const node = nodesById[id]
+      return node?.type === 'group' ? (node as import('./types/editor').GroupNode).childIds.join(',') : ''
+    }).join('|')
+  }, [selectedIds, nodesById])
+
   useEffect(() => {
     const transformer = transformerRef.current
     if (!transformer) {
@@ -429,7 +438,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     transformer.nodes(nodes)
     transformer.getLayer()?.batchDraw()
-  }, [allowStageSelection, selectedIds, selectedStage, viewport.scale, viewport.x, viewport.y])
+  }, [allowStageSelection, selectedIds, selectedStage, viewport.scale, viewport.x, viewport.y, selectedChildKey])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

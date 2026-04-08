@@ -742,7 +742,6 @@ export function buildDepthPreviewPlan(
     if (node.type === 'path' && isOpenPathNode(node)) {
       const s = getScope()
       s.activate()
-      let pathItem: paper.Path | null = null
       try {
         const parsed = new s.CompoundPath(node.data)
         // Flatten compound paths to individual sub-paths
@@ -752,7 +751,6 @@ export function buildDepthPreviewPlan(
         for (const subPath of subPaths) {
           applyTransformChain(subPath, transforms)
           const flatPoints: number[] = []
-          const segments = subPath.segments ?? []
           // Flatten curves to points
           const flatPath = subPath.clone() as paper.Path
           flatPath.flatten(1)
