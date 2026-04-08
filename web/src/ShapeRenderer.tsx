@@ -92,7 +92,7 @@ function SvgPathNode({
     { fill: outlineOnly ? '' : node.fill, stroke: baseStroke, strokeWidth: baseStrokeWidth },
     cncOverrides,
   )
-  if (outlineOnly) {
+  if (outlineOnly && !cncOverrides.fill) {
     delete visualProps.fill
   }
   if (isSelected && !outlineOnly) {
@@ -410,7 +410,7 @@ export function ShapeRenderer({
       { fill: outlineOnly ? '' : node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
       cncOverrides,
     )
-    if (outlineOnly) {
+    if (outlineOnly && !cncOverrides.fill) {
       visualProps.fill = undefined
     }
     if (commonProps.isSelected && !outlineOnly) {

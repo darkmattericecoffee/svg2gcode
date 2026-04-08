@@ -479,7 +479,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     transformer.nodes(nodes)
     transformer.getLayer()?.batchDraw()
-  }, [allowStageSelection, selectedIds, selectedStage, viewport.scale, viewport.x, viewport.y, selectedChildKey])
+  }, [allowStageSelection, selectedIds, selectedStage, viewport.scale, viewport.x, viewport.y, selectedChildKey, showEngravePreview])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

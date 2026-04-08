@@ -33,6 +33,8 @@ export type NormalizedEngraveType = 'contour' | 'pocket' | 'plunge'
 
 export interface CncVisualOverrides {
   stroke?: string
+  strokeWidth?: number
+  strokeScaleEnabled?: boolean
   fill?: string
 }
 
@@ -94,10 +96,12 @@ export function getCncVisualOverrides(
   }
 
   if (type === 'pocket') {
-    const fillAlpha = 0.30 + ratio * 0.65
+    const hue = 60 - ratio * 60
     return {
-      fill: `rgba(15, 8, 3, ${fillAlpha.toFixed(2)})`,
-      stroke: depthToColor(cutDepth),
+      fill: `hsla(${hue}, 90%, 55%, 0.5)`,
+      stroke: 'rgba(0, 0, 0, 0.35)',
+      strokeWidth: 1.5,
+      strokeScaleEnabled: false,
     }
   }
 

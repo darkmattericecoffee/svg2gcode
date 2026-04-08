@@ -20,6 +20,21 @@ type GcodeWorkerResponse =
 let workerInstance: Worker | null = null
 let nextJobId = 1
 
+function formatToolDiameterMm(value: number): string {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(2).replace(/\.?0+$/, "")
+}
+
+function normalizeGenerationError(message: string, toolDiameter: number): string {
+  const pocketTooNarrow =
+    "Filled SVG geometry was found, but the selected tool diameter is too large to fit inside any filled region."
+
+  if (message.includes(pocketTooNarrow)) {
+    return `The SVG imported correctly, but this Pocket operation cannot be machined with the current ${formatToolDiameterMm(toolDiameter)} mm bit. Some filled regions are narrower than the tool. Try a smaller bit or switch this part to Contour.`
+  }
+
+  return message
+}
+
 function getGcodeWorker() {
   if (!workerInstance) {
     workerInstance = new Worker(new URL("../workers/gcodeWorker.ts", import.meta.url), {
@@ -88,7 +103,9 @@ export function useGcodeGeneration() {
       setState({ isGenerating: false, progress: null, result, error: null })
       return result
     } catch (err) {
-      const message = err instanceof Error ? err.message : "GCode generation failed"
+      const rawMessage = err instanceof Error ? err.message : "GCode generation failed"
+      const { machiningSettings } = useEditorStore.getState()
+      const message = normalizeGenerationError(rawMessage, machiningSettings.toolDiameter)
       setState({ isGenerating: false, progress: null, result: null, error: message })
       return null
     }
