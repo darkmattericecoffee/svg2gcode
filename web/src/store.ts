@@ -56,6 +56,7 @@ export interface EditorStore {
     pendingImport: PendingSvgImport | null
     importStatus: ImportStatus | null
   }
+  nodeVersion: number
   hoveredId: string | null
   eyedropperMode: EyedropperMode
   eyedropperSourceNodeId: string | null
@@ -289,6 +290,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     pendingImport: null,
     importStatus: null,
   },
+  nodeVersion: 0,
   hoveredId: null,
   eyedropperMode: 'off',
   eyedropperSourceNodeId: null,
@@ -423,6 +425,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const { nodesById, rootIds, selectedIds, artboard } = get()
     const snapshot: HistorySnapshot = { nodesById, rootIds, selectedIds, artboard }
     set((state) => ({
+      nodeVersion: state.nodeVersion + 1,
       history: {
         past: [...state.history.past.slice(-(MAX_HISTORY - 1)), snapshot],
         future: [],
@@ -435,28 +438,30 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const past = [...history.past]
     const snapshot = past.pop()!
     const current: HistorySnapshot = { nodesById, rootIds, selectedIds, artboard }
-    set({
+    set((state) => ({
       nodesById: snapshot.nodesById,
       rootIds: snapshot.rootIds,
       selectedIds: snapshot.selectedIds,
       artboard: snapshot.artboard,
       focusGroupId: null,
+      nodeVersion: state.nodeVersion + 1,
       history: { past, future: [current, ...history.future] },
-    })
+    }))
   },
   redo: () => {
     const { history, nodesById, rootIds, selectedIds, artboard } = get()
     if (history.future.length === 0) return
     const [snapshot, ...future] = history.future
     const current: HistorySnapshot = { nodesById, rootIds, selectedIds, artboard }
-    set({
+    set((state) => ({
       nodesById: snapshot.nodesById,
       rootIds: snapshot.rootIds,
       selectedIds: snapshot.selectedIds,
       artboard: snapshot.artboard,
       focusGroupId: null,
+      nodeVersion: state.nodeVersion + 1,
       history: { past: [...history.past, current], future },
-    })
+    }))
   },
   deleteSelected: () => {
     const { nodesById, rootIds, selectedIds } = get()

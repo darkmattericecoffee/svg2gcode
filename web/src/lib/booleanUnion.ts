@@ -58,6 +58,12 @@ function getScope(): paper.PaperScope {
   return scope
 }
 
+function clearScope(): void {
+  if (scope?.project) {
+    scope.project.activeLayer.removeChildren()
+  }
+}
+
 function toLocalTransform(node: CanvasNode): LocalTransform {
   return {
     x: node.x,
@@ -645,40 +651,44 @@ export function computeUnionPath(shapes: PreviewAreaShape[]): string | null {
     return null
   }
 
-  const s = getScope()
-  s.activate()
+  try {
+    const s = getScope()
+    s.activate()
 
-  const items: paper.PathItem[] = []
-  for (const shape of visibleShapes) {
-    const item = previewShapeToPaperItem(shape)
-    if (item) {
-      items.push(item)
+    const items: paper.PathItem[] = []
+    for (const shape of visibleShapes) {
+      const item = previewShapeToPaperItem(shape)
+      if (item) {
+        items.push(item)
+      }
     }
-  }
 
-  if (items.length === 0) {
-    return null
-  }
+    if (items.length === 0) {
+      return null
+    }
 
-  if (items.length === 1) {
-    const pathData = (items[0] as paper.PathItem & { pathData?: string }).pathData ?? null
-    items[0].remove()
-    return pathData
-  }
+    if (items.length === 1) {
+      const pathData = (items[0] as paper.PathItem & { pathData?: string }).pathData ?? null
+      items[0].remove()
+      return pathData
+    }
 
-  let union: paper.PathItem = items[0]
-  for (let i = 1; i < items.length; i += 1) {
-    const next = union.unite(items[i])
+    let union: paper.PathItem = items[0]
+    for (let i = 1; i < items.length; i += 1) {
+      const next = union.unite(items[i])
+      union.remove()
+      items[i].remove()
+      union = next as paper.PathItem
+    }
+
+    smoothSharpCorners(union)
+
+    const pathData = (union as paper.PathItem & { pathData?: string }).pathData ?? null
     union.remove()
-    items[i].remove()
-    union = next as paper.PathItem
+    return pathData
+  } finally {
+    clearScope()
   }
-
-  smoothSharpCorners(union)
-
-  const pathData = (union as paper.PathItem & { pathData?: string }).pathData ?? null
-  union.remove()
-  return pathData
 }
 
 export function buildDepthPreviewPlan(
@@ -687,6 +697,7 @@ export function buildDepthPreviewPlan(
   fallbackDepth: number | null = null,
   toolDiameter = 1,
 ): DepthPreviewPlan {
+  try {
   const areaShapesByKey = new Map<string, PreviewAreaShape[]>()
   const strokeShapes: PreviewStrokeShape[] = []
   const interactiveRootIds = new Set<string>()
@@ -910,5 +921,8 @@ export function buildDepthPreviewPlan(
     strokeShapes,
     interactiveRootIds: rootIds.filter((rootId) => interactiveRootIds.has(rootId)),
     passthroughRootIds,
+  }
+  } finally {
+    clearScope()
   }
 }

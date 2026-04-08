@@ -9,6 +9,7 @@ export function useImageAsset(src: string): HTMLImageElement | null {
     img.src = src
     return () => {
       img.onload = null
+      img.src = ''
     }
   }, [src])
 
