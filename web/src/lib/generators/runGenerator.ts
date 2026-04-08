@@ -1,5 +1,6 @@
 import type { GeneratorParams } from '../../types/editor'
 import { generateDowelHole } from './dowelHole'
+import { generateScallopFrame } from './scallopFrame'
 import { generateTenon } from './tenon'
 
 export function runGenerator(params: GeneratorParams): string {
@@ -8,5 +9,7 @@ export function runGenerator(params: GeneratorParams): string {
       return generateTenon(params)
     case 'dowelHole':
       return generateDowelHole(params)
+    case 'scallopFrame':
+      return generateScallopFrame(params)
   }
 }

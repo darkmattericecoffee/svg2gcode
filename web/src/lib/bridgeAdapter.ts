@@ -52,26 +52,37 @@ export async function editorStateToArtObjects(
     const preparedSvg = await prepareSvgDocument(svgText)
 
     const defaultEngraveType = resolveDefaultEngraveType(rootNode)
-    const artObject = createArtObject({
-      artObjectId: rootId,
-      name: rootNode.name,
-      preparedSvg,
-      settings,
-      defaultEngraveType,
-      existingArtObjects: artObjects,
-    })
-
-    // Override placement and dimensions from the editor's canvas state
     const nodeSize = getNodeSize(rootNode, nodesById)
-    artObject.widthMm = nodeSize.width
-    artObject.heightMm = nodeSize.height
-    artObject.placementX = rootNode.x
-    artObject.placementY = artboard.height - rootNode.y - nodeSize.height
 
-    // Override element assignments from editor CNC metadata
-    applyEditorCncMetadata(artObject, rootNode, nodesById, machiningSettings)
+    // Expand grid nodes into N×M individual art objects
+    const grid = rootNode.gridMetadata
+    const rows = grid ? Math.max(1, grid.rows) : 1
+    const cols = grid ? Math.max(1, grid.cols) : 1
+    const rowGap = grid ? grid.rowGap : 0
+    const colGap = grid ? grid.colGap : 0
 
-    artObjects.push(artObject)
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cellId = rows === 1 && cols === 1 ? rootId : `${rootId}-grid-${r}-${c}`
+        const artObject = createArtObject({
+          artObjectId: cellId,
+          name: rows === 1 && cols === 1 ? rootNode.name : `${rootNode.name} [${r + 1},${c + 1}]`,
+          preparedSvg,
+          settings,
+          defaultEngraveType,
+          existingArtObjects: artObjects,
+        })
+
+        artObject.widthMm = nodeSize.width
+        artObject.heightMm = nodeSize.height
+        artObject.placementX = rootNode.x + c * (nodeSize.width + colGap)
+        const cellCanvasY = rootNode.y + r * (nodeSize.height + rowGap)
+        artObject.placementY = artboard.height - cellCanvasY - nodeSize.height
+
+        applyEditorCncMetadata(artObject, rootNode, nodesById, machiningSettings)
+        artObjects.push(artObject)
+      }
+    }
   }
 
   return artObjects

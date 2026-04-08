@@ -1,9 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Tabs } from '@heroui/react'
+import { Button, ButtonGroup, Tabs } from '@heroui/react'
+import { LayoutCells } from '@gravity-ui/icons'
 
+import { resizeGeneratorToBounds, supportsGeneratorResizeBack } from '../lib/generators'
 import { getNodeSize } from '../lib/nodeDimensions'
+import { AppIcon, Icons } from '../lib/icons'
 import { useEditorStore } from '../store'
-import type { CanvasNode } from '../types/editor'
+import type { CanvasNode, GroupNode } from '../types/editor'
 import type { MaterialPreset } from '../lib/materialPresets'
 import { MaterialTabContent, PreviewTabContent } from './MaterialTabContent'
 import { CutDepthEditor } from './CutDepthEditor'
@@ -67,6 +70,11 @@ function DesignTabContent() {
   const nodesById = useEditorStore((s) => s.nodesById)
   const artboard = useEditorStore((s) => s.artboard)
   const updateNodeTransform = useEditorStore((s) => s.updateNodeTransform)
+  const updateGeneratorParams = useEditorStore((s) => s.updateGeneratorParams)
+  const alignSelectedNodes = useEditorStore((s) => s.alignSelectedNodes)
+  const enableGrid = useEditorStore((s) => s.enableGrid)
+  const disableGrid = useEditorStore((s) => s.disableGrid)
+  const updateGridMetadata = useEditorStore((s) => s.updateGridMetadata)
 
   const firstNode = selectedIds.length > 0 ? nodesById[selectedIds[0]] : null
 
@@ -95,8 +103,57 @@ function DesignTabContent() {
     }
   }, [selectionBounds, artboard.height])
 
+  const resizableGeneratorNode = useMemo(() => {
+    if (!firstNode || selectedIds.length !== 1 || firstNode.type !== 'group') return null
+    const group = firstNode as GroupNode
+    const params = group.generatorMetadata?.params
+    if (!params || !supportsGeneratorResizeBack(params)) return null
+    return group
+  }, [firstNode, selectedIds.length])
+
   return (
     <div className="space-y-5">
+      {/* Alignment controls — visible when something is selected */}
+      {firstNode && (
+        <section className="space-y-3">
+          <SectionHeading title="Align" />
+          <div className="space-y-2">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Horizontal</span>
+              <ButtonGroup orientation="horizontal" variant="tertiary">
+                <Button isIconOnly onPress={() => alignSelectedNodes('left')}>
+                  <AppIcon icon={Icons.alignLeft} className="h-4 w-4" />
+                </Button>
+                <Button isIconOnly onPress={() => alignSelectedNodes('centerX')}>
+                  <ButtonGroup.Separator />
+                  <AppIcon icon={Icons.alignCenterHorizontal} className="h-4 w-4" />
+                </Button>
+                <Button isIconOnly onPress={() => alignSelectedNodes('right')}>
+                  <ButtonGroup.Separator />
+                  <AppIcon icon={Icons.alignRight} className="h-4 w-4" />
+                </Button>
+              </ButtonGroup>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Vertical</span>
+              <ButtonGroup orientation="horizontal" variant="tertiary">
+                <Button isIconOnly onPress={() => alignSelectedNodes('top')}>
+                  <AppIcon icon={Icons.alignTop} className="h-4 w-4" />
+                </Button>
+                <Button isIconOnly onPress={() => alignSelectedNodes('centerY')}>
+                  <ButtonGroup.Separator />
+                  <AppIcon icon={Icons.alignCenterVertical} className="h-4 w-4" />
+                </Button>
+                <Button isIconOnly onPress={() => alignSelectedNodes('bottom')}>
+                  <ButtonGroup.Separator />
+                  <AppIcon icon={Icons.alignBottom} className="h-4 w-4" />
+                </Button>
+              </ButtonGroup>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Selected art */}
       <section className="space-y-4">
         <SectionHeading title="Selected art" />
@@ -126,6 +183,17 @@ function DesignTabContent() {
               unit="mm"
               onChange={(v) => {
                 if (v === null || v <= 0 || selectionBounds.width <= 0) return
+                if (resizableGeneratorNode) {
+                  updateGeneratorParams(
+                    resizableGeneratorNode.id,
+                    resizeGeneratorToBounds(
+                      resizableGeneratorNode.generatorMetadata!.params,
+                      v,
+                      selectionBounds.height,
+                    ),
+                  )
+                  return
+                }
                 const ratio = v / selectionBounds.width
                 selectedIds.forEach((id) => {
                   const node = nodesById[id]
@@ -145,6 +213,17 @@ function DesignTabContent() {
               unit="mm"
               onChange={(v) => {
                 if (v === null || v <= 0 || selectionBounds.height <= 0) return
+                if (resizableGeneratorNode) {
+                  updateGeneratorParams(
+                    resizableGeneratorNode.id,
+                    resizeGeneratorToBounds(
+                      resizableGeneratorNode.generatorMetadata!.params,
+                      selectionBounds.width,
+                      v,
+                    ),
+                  )
+                  return
+                }
                 const ratio = v / selectionBounds.height
                 selectedIds.forEach((id) => {
                   const node = nodesById[id]
@@ -196,6 +275,71 @@ function DesignTabContent() {
         </section>
       )}
 
+      {/* Grid/Repeat — only for single selection */}
+      {firstNode && selectedIds.length === 1 && (
+        <section className="space-y-4">
+          <SectionHeading title="Grid / Repeat" />
+          {firstNode.gridMetadata ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <NumberPill
+                  label="Cols"
+                  value={firstNode.gridMetadata.cols}
+                  unit=""
+                  onChange={(v) => {
+                    if (v === null || v < 1) return
+                    updateGridMetadata(firstNode.id, { cols: Math.round(v) })
+                  }}
+                />
+                <NumberPill
+                  label="Rows"
+                  value={firstNode.gridMetadata.rows}
+                  unit=""
+                  onChange={(v) => {
+                    if (v === null || v < 1) return
+                    updateGridMetadata(firstNode.id, { rows: Math.round(v) })
+                  }}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <NumberPill
+                  label="Col gap"
+                  value={round2(firstNode.gridMetadata.colGap)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null || v < 0) return
+                    updateGridMetadata(firstNode.id, { colGap: v })
+                  }}
+                />
+                <NumberPill
+                  label="Row gap"
+                  value={round2(firstNode.gridMetadata.rowGap)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null || v < 0) return
+                    updateGridMetadata(firstNode.id, { rowGap: v })
+                  }}
+                />
+              </div>
+              <button
+                className="w-full rounded-md border border-border px-3 py-2 text-xs text-destructive hover:bg-content1"
+                onClick={() => disableGrid(firstNode.id)}
+              >
+                Remove grid
+              </button>
+            </div>
+          ) : (
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-border bg-content1 px-3 py-2 text-sm text-foreground hover:bg-content2"
+              onClick={() => enableGrid(firstNode.id)}
+            >
+              <LayoutCells className="h-4 w-4" />
+              Make grid
+            </button>
+          )}
+        </section>
+      )}
+
       {/* Cut depths */}
       <CutDepthEditor />
     </div>
@@ -244,7 +388,7 @@ function NumberPill({
           else if (e.key === 'Escape') { setEditValue(null); e.currentTarget.blur() }
         }}
       />
-      <div className="pl-1 text-xs text-muted-foreground">{unit}</div>
+      {unit && <div className="pl-1 text-xs text-muted-foreground">{unit}</div>}
     </div>
   )
 }

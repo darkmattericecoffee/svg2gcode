@@ -4,14 +4,17 @@ import { Sparkles } from '@gravity-ui/icons'
 
 import dominoImage from '../../assets/library/domino.png'
 import dowelImage from '../../assets/library/dowel.png'
+import scallopFrameImage from '../../assets/library/scallop-frame.svg'
 import { useEditorStore } from '../../store'
 import type {
   DowelHoleParams,
   GeneratorParams,
   GroupNode,
+  ScallopFrameParams,
   TenonParams,
 } from '../../types/editor'
 import { DowelHoleForm } from './DowelHoleForm'
+import { ScallopFrameForm } from './ScallopFrameForm'
 import { TenonForm } from './TenonForm'
 
 const DEFAULT_TENON: TenonParams = {
@@ -39,11 +42,21 @@ const DEFAULT_DOWEL: DowelHoleParams = {
   outputType: 'pocket',
 }
 
+const DEFAULT_SCALLOP_FRAME: ScallopFrameParams = {
+  kind: 'scallopFrame',
+  name: 'Scallop Frame',
+  width: 120,
+  height: 90,
+  minScallopSize: 12,
+  outputType: 'contour',
+}
+
 interface GeneratorCard {
   kind: GeneratorParams['kind']
   label: string
   description: string
   imageSrc: string
+  tags: string[]
   defaultParams: GeneratorParams
 }
 
@@ -53,6 +66,7 @@ const GENERATORS: GeneratorCard[] = [
     label: 'Tenon / Domino',
     description: 'Rectangular mortise pocket or contour for repeatable joinery.',
     imageSrc: dominoImage,
+    tags: ['tenon', 'domino', 'mortise', 'joinery'],
     defaultParams: DEFAULT_TENON,
   },
   {
@@ -60,7 +74,16 @@ const GENERATORS: GeneratorCard[] = [
     label: 'Dowel Hole',
     description: 'Circular dowel placements for drilled or pocketed alignment holes.',
     imageSrc: dowelImage,
+    tags: ['dowel', 'hole', 'drill', 'joinery'],
     defaultParams: DEFAULT_DOWEL,
+  },
+  {
+    kind: 'scallopFrame',
+    label: 'Scallop Frame',
+    description: 'Decorative scalloped rectangle that regenerates as you resize it.',
+    imageSrc: scallopFrameImage,
+    tags: ['scallop', 'frame', 'border', 'decorative'],
+    defaultParams: DEFAULT_SCALLOP_FRAME,
   },
 ]
 
@@ -210,11 +233,26 @@ export function LibraryPanel() {
                             ? (params) => updateGeneratorParams(selectedNodeId, params)
                             : undefined}
                         />
-                      ) : (
+                      ) : card.kind === 'dowelHole' ? (
                         <DowelHoleForm
                           initialParams={(selectedParams && selectedParams.kind === 'dowelHole')
                             ? selectedParams
                             : DEFAULT_DOWEL}
+                          mode={isEditing ? 'edit' : 'new'}
+                          nodeId={selectedNodeId}
+                          onPlace={isEditing ? undefined : (params) => {
+                            placeGenerator(params)
+                            setActiveKind(null)
+                          }}
+                          onUpdate={isEditing && selectedNodeId
+                            ? (params) => updateGeneratorParams(selectedNodeId, params)
+                            : undefined}
+                        />
+                      ) : (
+                        <ScallopFrameForm
+                          initialParams={(selectedParams && selectedParams.kind === 'scallopFrame')
+                            ? selectedParams
+                            : DEFAULT_SCALLOP_FRAME}
                           mode={isEditing ? 'edit' : 'new'}
                           nodeId={selectedNodeId}
                           onPlace={isEditing ? undefined : (params) => {

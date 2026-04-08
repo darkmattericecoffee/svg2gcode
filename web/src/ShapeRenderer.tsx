@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { Circle, Group, Line, Path, Rect } from 'react-konva'
@@ -38,6 +38,38 @@ export interface ShapeRendererProps {
   onNodeDragEnd?: (nodeId: string, konvaNode: Konva.Node) => void
 }
 
+const SCALLOP_BREATHE_MIN_OPACITY = 0.55
+const SCALLOP_BREATHE_MAX_OPACITY = 0.95
+const SCALLOP_BREATHE_CYCLE_MS = 900
+
+function useBreathingOpacity(active: boolean): number {
+  const [opacity, setOpacity] = useState(1)
+
+  useEffect(() => {
+    if (!active) {
+      setOpacity(1)
+      return
+    }
+
+    let frameId = 0
+
+    const tick = (now: number) => {
+      const phase = (now % SCALLOP_BREATHE_CYCLE_MS) / SCALLOP_BREATHE_CYCLE_MS
+      const wave = (Math.sin(phase * Math.PI * 2) + 1) / 2
+      setOpacity(
+        SCALLOP_BREATHE_MIN_OPACITY +
+        (SCALLOP_BREATHE_MAX_OPACITY - SCALLOP_BREATHE_MIN_OPACITY) * wave,
+      )
+      frameId = window.requestAnimationFrame(tick)
+    }
+
+    frameId = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(frameId)
+  }, [active])
+
+  return opacity
+}
+
 interface SharedShapeProps {
   node: CanvasNode
   opacity: number
@@ -59,6 +91,8 @@ interface SharedShapeProps {
   onDragMove: (event: KonvaEventObject<DragEvent>) => void
   onDragEnd: (event: KonvaEventObject<DragEvent>) => void
 }
+
+const MIN_PLUNGE_HIT_DIAMETER_PX = 18
 
 function SvgPathNode({
   node,
@@ -121,6 +155,10 @@ function SvgPathNode({
   const plungeRadius = plungeDiameter / 2
   const plungeCenterX = renderHint?.centerX ?? plungeRadius
   const plungeCenterY = renderHint?.centerY ?? plungeRadius
+  const plungeHitRadius = Math.max(
+    plungeRadius,
+    MIN_PLUNGE_HIT_DIAMETER_PX / Math.max((viewportScale ?? 1) * 2, 0.0001),
+  )
 
   if (isPlunge && plungeRadius > 0) {
     const neutralStroke = isSelected ? '#0d99ff' : 'rgba(74, 52, 30, 0.72)'
@@ -155,6 +193,13 @@ function SvgPathNode({
         onDragMove={onDragMove}
         onDragEnd={onDragEnd}
       >
+        <Circle
+          x={plungeCenterX}
+          y={plungeCenterY}
+          radius={plungeHitRadius}
+          fill="rgba(0,0,0,0.01)"
+          strokeEnabled={false}
+        />
         <Circle
           x={plungeCenterX}
           y={plungeCenterY}
@@ -240,6 +285,7 @@ export function ShapeRenderer({
   const interactionMode = useEditorStore((state) => state.interactionMode)
   const directSelectionModifierActive = useEditorStore((state) => state.directSelectionModifierActive)
   const pendingImport = useEditorStore((state) => state.ui.pendingImport)
+  const isTransforming = useEditorStore((state) => state.ui.isTransforming)
   const eyedropperMode = useEditorStore((state) => state.eyedropperMode)
   const applyEyedropperPick = useEditorStore((state) => state.applyEyedropperPick)
   const toolDiameter = useEditorStore((state) => state.machiningSettings.toolDiameter)
@@ -356,6 +402,15 @@ export function ShapeRenderer({
     onDragEnd,
   }
 
+  const shouldBreatheWhileTransforming =
+    node.type === 'group' &&
+    node.generatorMetadata?.params.kind === 'scallopFrame' &&
+    isTransforming &&
+    commonProps.isSelected &&
+    !hitboxOnly
+
+  const breathingOpacity = useBreathingOpacity(shouldBreatheWhileTransforming)
+
   if (node.type === 'group') {
     const groupNode = node as GroupNode
 
@@ -370,7 +425,7 @@ export function ShapeRenderer({
         scaleY={groupNode.scaleY}
         draggable={draggable}
         visible={groupNode.visible}
-        opacity={opacity}
+        opacity={opacity * breathingOpacity}
         listening={listening}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}

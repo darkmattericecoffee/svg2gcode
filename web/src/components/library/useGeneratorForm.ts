@@ -16,9 +16,7 @@ export function useGeneratorForm(
   // Reset draft when the node changes (switching selection)
   useEffect(() => {
     setDraft(initialParams)
-    isMounted.current = false
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeId])
+  }, [initialParams, nodeId])
 
   // Mark as mounted after first render so we skip the initial debounce
   useEffect(() => {

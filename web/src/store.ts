@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 import { getSelectableIdsInScope, getSubtreeIds, isGroupNode } from './lib/editorTree'
-import { runGenerator } from './lib/generators'
+import { normalizeGeneratorParams, runGenerator, supportsGeneratorResizeBack } from './lib/generators'
 import { resolveParamsAgainstTool } from './lib/generators'
 import { getNodeSize } from './lib/nodeDimensions'
 import { importSvgToScene } from './lib/svgImport'
@@ -11,6 +11,7 @@ import type {
   CncMetadata,
   EyedropperMode,
   GeneratorParams,
+  GridMetadata,
   GroupNode,
   ImportStatus,
   InteractionMode,
@@ -101,7 +102,22 @@ export interface EditorStore {
   leftPanelTab: 'layers' | 'library'
   setLeftPanelTab: (tab: 'layers' | 'library') => void
   placeGenerator: (params: GeneratorParams) => void
-  updateGeneratorParams: (nodeId: string, params: GeneratorParams) => void
+  updateGeneratorParams: (
+    nodeId: string,
+    params: GeneratorParams,
+    options?: {
+      groupPatch?: Partial<GroupNode>
+      skipHistory?: boolean
+    },
+  ) => void
+
+  // Alignment
+  alignSelectedNodes: (direction: 'left' | 'right' | 'top' | 'bottom' | 'centerX' | 'centerY') => void
+
+  // Grid/Repeat
+  enableGrid: (nodeId: string) => void
+  disableGrid: (nodeId: string) => void
+  updateGridMetadata: (nodeId: string, patch: Partial<GridMetadata>) => void
 
   // Preview state
   preview: PreviewState
@@ -159,6 +175,72 @@ function applyGeneratorRenderHints(
     if (renderHint) {
       node.renderHint = renderHint
     }
+  }
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function resolveAnchoredAxisPosition(
+  currentStart: number,
+  currentSize: number,
+  nextSize: number,
+  containerSize: number,
+  preferStartAnchor: boolean,
+): number {
+  const minStart = 0
+  const maxStart = Math.max(0, containerSize - nextSize)
+  const startAnchored = currentStart
+  const endAnchored = currentStart + currentSize - nextSize
+  const fits = (candidate: number) => candidate >= minStart && candidate <= maxStart
+
+  if (preferStartAnchor) {
+    if (fits(startAnchored)) return startAnchored
+    if (fits(endAnchored)) return endAnchored
+    return clamp(startAnchored, minStart, maxStart)
+  }
+
+  if (fits(endAnchored)) return endAnchored
+  if (fits(startAnchored)) return startAnchored
+  return clamp(endAnchored, minStart, maxStart)
+}
+
+function getAutoGeneratorGroupPatch(
+  existingGroup: GroupNode,
+  nodesById: Record<string, CanvasNode>,
+  artboard: ArtboardState,
+  nextWidth: number,
+  nextHeight: number,
+): Pick<GroupNode, 'x' | 'y'> {
+  const currentSize = getNodeSize(existingGroup, nodesById)
+  const currentWidth = currentSize.width
+  const currentHeight = currentSize.height
+  const currentRight = existingGroup.x + currentWidth
+  const currentBottom = existingGroup.y + currentHeight
+  const spaceLeft = existingGroup.x
+  const spaceRight = artboard.width - currentRight
+  const spaceAbove = existingGroup.y
+  const spaceBelow = artboard.height - currentBottom
+
+  const preferGrowLeft = spaceLeft > spaceRight
+  const preferGrowUp = spaceAbove >= spaceBelow
+
+  return {
+    x: resolveAnchoredAxisPosition(
+      existingGroup.x,
+      currentWidth,
+      nextWidth,
+      artboard.width,
+      !preferGrowLeft,
+    ),
+    y: resolveAnchoredAxisPosition(
+      existingGroup.y,
+      currentHeight,
+      nextHeight,
+      artboard.height,
+      !preferGrowUp,
+    ),
   }
 }
 
@@ -768,7 +850,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
   placeGenerator: (params) => {
     const { artboard, machiningSettings, nodesById, rootIds } = get()
-    const resolved = resolveParamsAgainstTool(params, machiningSettings)
+    const resolved = normalizeGeneratorParams(resolveParamsAgainstTool(params, machiningSettings))
     const svgText = runGenerator(resolved)
     const pending = importSvgToScene({
       artboardWidth: artboard.width,
@@ -807,14 +889,16 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     )
   },
 
-  updateGeneratorParams: (nodeId, params) => {
+  updateGeneratorParams: (nodeId, params, options) => {
     const { nodesById, artboard, machiningSettings } = get()
     const existingNode = nodesById[nodeId]
     if (!existingNode || existingNode.type !== 'group') return
 
-    get().pushHistory()
+    if (!options?.skipHistory) {
+      get().pushHistory()
+    }
 
-    const resolved = resolveParamsAgainstTool(params, machiningSettings)
+    const resolved = normalizeGeneratorParams(resolveParamsAgainstTool(params, machiningSettings))
     const svgText = runGenerator(resolved)
     const pending = importSvgToScene({
       artboardWidth: artboard.width,
@@ -827,6 +911,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     const existingGroup = existingNode as GroupNode
     const newRootNode = pending.nodesById[pending.rootId]
     if (!newRootNode || newRootNode.type !== 'group') return
+    const nextGroupSize = getNodeSize(newRootNode, pending.nodesById)
 
     // Collect old child subtree IDs to remove
     const oldChildIds = new Set<string>()
@@ -853,10 +938,25 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
     }
 
+    const autoGroupPatch = getAutoGeneratorGroupPatch(
+      existingGroup,
+      nodesById,
+      artboard,
+      nextGroupSize.width,
+      nextGroupSize.height,
+    )
+
     const updatedGroup: GroupNode = {
       ...existingGroup,
+      ...autoGroupPatch,
+      ...options?.groupPatch,
       childIds: (newRootNode as GroupNode).childIds,
       generatorMetadata: { params: resolved },
+    }
+
+    if (supportsGeneratorResizeBack(resolved)) {
+      updatedGroup.scaleX = 1
+      updatedGroup.scaleY = 1
     }
 
     const prunedNodes: Record<string, CanvasNode> = {}
@@ -866,6 +966,86 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     set({
       nodesById: { ...prunedNodes, [nodeId]: updatedGroup, ...newChildren },
+    })
+  },
+
+  // Alignment
+  alignSelectedNodes: (direction) => {
+    const { selectedIds, nodesById, artboard } = get()
+    if (selectedIds.length === 0) return
+    get().pushHistory()
+
+    // Compute union bounding box
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const id of selectedIds) {
+      const node = nodesById[id]
+      if (!node) continue
+      const ns = getNodeSize(node, nodesById)
+      if (node.x < minX) minX = node.x
+      if (node.y < minY) minY = node.y
+      if (node.x + ns.width > maxX) maxX = node.x + ns.width
+      if (node.y + ns.height > maxY) maxY = node.y + ns.height
+    }
+
+    // For single node, align to artboard
+    const refMinX = selectedIds.length === 1 ? 0 : minX
+    const refMinY = selectedIds.length === 1 ? 0 : minY
+    const refMaxX = selectedIds.length === 1 ? artboard.width : maxX
+    const refMaxY = selectedIds.length === 1 ? artboard.height : maxY
+    const refCenterX = (refMinX + refMaxX) / 2
+    const refCenterY = (refMinY + refMaxY) / 2
+
+    for (const id of selectedIds) {
+      const node = nodesById[id]
+      if (!node) continue
+      const ns = getNodeSize(node, nodesById)
+      let newX = node.x
+      let newY = node.y
+      if (direction === 'left') newX = refMinX
+      else if (direction === 'right') newX = refMaxX - ns.width
+      else if (direction === 'centerX') newX = refCenterX - ns.width / 2
+      else if (direction === 'top') newY = refMinY
+      else if (direction === 'bottom') newY = refMaxY - ns.height
+      else if (direction === 'centerY') newY = refCenterY - ns.height / 2
+      get().updateNodeTransform(id, { x: newX, y: newY } as Partial<CanvasNode>)
+    }
+  },
+
+  // Grid/Repeat
+  enableGrid: (nodeId) => {
+    get().pushHistory()
+    set((state) => {
+      const node = state.nodesById[nodeId]
+      if (!node) return {}
+      return {
+        nodesById: {
+          ...state.nodesById,
+          [nodeId]: { ...node, gridMetadata: { rows: 1, cols: 2, rowGap: 5, colGap: 5 } },
+        },
+      }
+    })
+  },
+
+  disableGrid: (nodeId) => {
+    get().pushHistory()
+    set((state) => {
+      const node = state.nodesById[nodeId]
+      if (!node) return {}
+      const { gridMetadata: _g, ...rest } = node as CanvasNode & { gridMetadata?: GridMetadata }
+      return { nodesById: { ...state.nodesById, [nodeId]: rest as CanvasNode } }
+    })
+  },
+
+  updateGridMetadata: (nodeId, patch) => {
+    set((state) => {
+      const node = state.nodesById[nodeId]
+      if (!node || !node.gridMetadata) return {}
+      return {
+        nodesById: {
+          ...state.nodesById,
+          [nodeId]: { ...node, gridMetadata: { ...node.gridMetadata, ...patch } },
+        },
+      }
     })
   },
 

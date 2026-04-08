@@ -17,6 +17,8 @@ import {
   getFocusScopeContainerId,
   getSubtreeIds,
 } from './lib/editorTree'
+import { resizeGeneratorToBounds, supportsGeneratorResizeBack } from './lib/generators'
+import { getNodeSize } from './lib/nodeDimensions'
 import { getBoundsForNodes, getGuides, getLineGuideStops } from './lib/objectSnapping'
 import { getNodeTransformPatch } from './lib/transformUtils'
 import { EngravePreviewStack, ShapeRenderer } from './ShapeRenderer'
@@ -268,6 +270,8 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const setIsTransforming = useEditorStore((state) => state.setIsTransforming)
   const setArtboardSize = useEditorStore((state) => state.setArtboardSize)
   const updateNodeTransform = useEditorStore((state) => state.updateNodeTransform)
+  const updateGeneratorParams = useEditorStore((state) => state.updateGeneratorParams)
+  const updateGridMetadata = useEditorStore((state) => state.updateGridMetadata)
   const duplicateInPlace = useEditorStore((state) => state.duplicateInPlace)
   const pushHistory = useEditorStore((state) => state.pushHistory)
   const undo = useEditorStore((state) => state.undo)
@@ -284,6 +288,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const artboardTargetRef = useRef<Konva.Rect | null>(null)
   const nodeRefs = useRef(new Map<string, Konva.Node>())
   const dragStartPositions = useRef<Record<string, { x: number; y: number }>>({})
+  const gapDragRef = useRef<{ startPointerX: number; startPointerY: number; startGap: number; axis: 'col' | 'row'; nodeId: string } | null>(null)
   const isAltKeyDownRef = useRef(false)
   const isDuplicateDragRef = useRef(false)
   const marqueeStartRef = useRef<Point | null>(null)
@@ -800,6 +805,22 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
       return
     }
 
+    // Gap handle dragging — takes priority over everything else
+    if (gapDragRef.current) {
+      const pos = stage.getPointerPosition()
+      if (pos) {
+        const { startPointerX, startPointerY, startGap, axis, nodeId } = gapDragRef.current
+        if (axis === 'col') {
+          const dx = pos.x - startPointerX
+          updateGridMetadata(nodeId, { colGap: Math.max(0, startGap + dx / viewport.scale) })
+        } else {
+          const dy = pos.y - startPointerY
+          updateGridMetadata(nodeId, { rowGap: Math.max(0, startGap + dy / viewport.scale) })
+        }
+      }
+      return
+    }
+
     // Hover detection when not dragging a marquee
     if (!marqueeStartRef.current && !interactionBlocked) {
       const pos = stage.getPointerPosition()
@@ -878,6 +899,13 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   }
 
   const onPointerUp = (event: KonvaEventObject<MouseEvent>) => {
+    // End gap handle drag
+    if (gapDragRef.current) {
+      gapDragRef.current = null
+      pushHistory()
+      return
+    }
+
     if (pendingImport || !marqueeStartRef.current) {
       return
     }
@@ -981,19 +1009,43 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
       return
     }
 
-    const selectedNodeRefs = selectedIds
-      .map((id) => nodeRefs.current.get(id))
-      .filter((node): node is Konva.Node => Boolean(node))
-
-    selectedNodeRefs.forEach((node, index) => {
-      const nodeId = selectedIds[index]
-      if (!nodeId) {
+    selectedIds.forEach((nodeId) => {
+      const node = nodeRefs.current.get(nodeId)
+      if (!node) {
         return
       }
 
       const nodeDefinition = nodesById[nodeId]
       if (!nodeDefinition) {
         return
+      }
+
+      if (nodeDefinition.type === 'group' && nodeDefinition.generatorMetadata) {
+        const params = nodeDefinition.generatorMetadata.params
+        if (supportsGeneratorResizeBack(params)) {
+          const nodeSize = getNodeSize(nodeDefinition, nodesById)
+          const requestedWidth = Math.max(1, nodeSize.width * Math.abs(node.scaleX()))
+          const requestedHeight = Math.max(1, nodeSize.height * Math.abs(node.scaleY()))
+
+          node.scaleX(1)
+          node.scaleY(1)
+
+          updateGeneratorParams(
+            nodeId,
+            resizeGeneratorToBounds(params, requestedWidth, requestedHeight),
+            {
+              skipHistory: true,
+              groupPatch: {
+                x: node.x(),
+                y: node.y(),
+                rotation: node.rotation(),
+                scaleX: 1,
+                scaleY: 1,
+              },
+            },
+          )
+          return
+        }
       }
 
       updateNodeTransform(nodeId, getNodeTransformPatch(nodeDefinition, node))
@@ -1430,19 +1482,145 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                   onNodeDragEnd={handleNodeDragEnd}
                 />
               )
-              : rootIds.map((nodeId) => (
-                <ShapeRenderer
-                  key={nodeId}
-                  nodeId={nodeId}
-                  registerNodeRef={registerNodeRef}
-                  interactionBlocked={interactionBlocked}
-                  showCncOverrides={showOutlines}
-                  outlineOnly={showOutlines}
-                  onNodeDragStart={handleNodeDragStart}
-                  onNodeDragMove={handleNodeDragMove}
-                  onNodeDragEnd={handleNodeDragEnd}
-                />
-              ))}
+              : rootIds.map((nodeId) => {
+                const node = nodesById[nodeId]
+                const grid = node?.gridMetadata
+                if (!grid || grid.rows * grid.cols <= 1) {
+                  return (
+                    <ShapeRenderer
+                      key={nodeId}
+                      nodeId={nodeId}
+                      registerNodeRef={registerNodeRef}
+                      interactionBlocked={interactionBlocked}
+                      showCncOverrides={showOutlines}
+                      outlineOnly={showOutlines}
+                      onNodeDragStart={handleNodeDragStart}
+                      onNodeDragMove={handleNodeDragMove}
+                      onNodeDragEnd={handleNodeDragEnd}
+                    />
+                  )
+                }
+                const ns = getNodeSize(node, nodesById)
+                const { rows, cols, rowGap, colGap } = grid
+                const cellW = ns.width
+                const cellH = ns.height
+                const copies: React.ReactNode[] = []
+                for (let r = 0; r < rows; r++) {
+                  for (let c = 0; c < cols; c++) {
+                    if (r === 0 && c === 0) {
+                      copies.push(
+                        <ShapeRenderer
+                          key={`${nodeId}-0-0`}
+                          nodeId={nodeId}
+                          registerNodeRef={registerNodeRef}
+                          interactionBlocked={interactionBlocked}
+                          showCncOverrides={showOutlines}
+                          outlineOnly={showOutlines}
+                          onNodeDragStart={handleNodeDragStart}
+                          onNodeDragMove={handleNodeDragMove}
+                          onNodeDragEnd={handleNodeDragEnd}
+                        />
+                      )
+                    } else {
+                      copies.push(
+                        <Group key={`${nodeId}-${r}-${c}`} x={c * (cellW + colGap)} y={r * (cellH + rowGap)} listening={false}>
+                          <ShapeRenderer
+                            nodeId={nodeId}
+                            registerNodeRef={() => {}}
+                            interactionBlocked
+                            showCncOverrides={showOutlines}
+                            outlineOnly={showOutlines}
+                          />
+                        </Group>
+                      )
+                    }
+                  }
+                }
+                return <React.Fragment key={nodeId}>{copies}</React.Fragment>
+              })}
+
+            {/* Grid gap handles for selected grid nodes */}
+            {selectedIds.map((nodeId) => {
+              const node = nodesById[nodeId]
+              const grid = node?.gridMetadata
+              if (!grid) return null
+              const ns = getNodeSize(node, nodesById)
+              const { rows, cols, rowGap, colGap } = grid
+              const cellW = ns.width
+              const cellH = ns.height
+              const totalW = cols * cellW + (cols - 1) * colGap
+              const totalH = rows * cellH + (rows - 1) * rowGap
+              const handleR = 5 / viewport.scale
+              const handles: React.ReactNode[] = []
+
+              // Column gap handles
+              for (let c = 0; c < cols - 1; c++) {
+                const gapX = node.x + (c + 1) * cellW + c * colGap
+                const gapW = Math.max(colGap, 0)
+                handles.push(
+                  <Rect
+                    key={`cgap-rect-${nodeId}-${c}`}
+                    x={gapX}
+                    y={node.y}
+                    width={gapW}
+                    height={totalH}
+                    fill="rgba(255,0,255,0.12)"
+                    stroke="rgba(255,0,255,0.35)"
+                    strokeWidth={0.5 / viewport.scale}
+                    listening={false}
+                  />,
+                  <Circle
+                    key={`cgap-handle-${nodeId}-${c}`}
+                    x={gapX + gapW / 2}
+                    y={node.y + totalH / 2}
+                    radius={handleR}
+                    fill="#0d99ff"
+                    stroke="#ffffff"
+                    strokeWidth={1 / viewport.scale}
+                    onMouseDown={(e) => {
+                      const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
+                      gapDragRef.current = { startPointerX: pos.x, startPointerY: pos.y, startGap: colGap, axis: 'col', nodeId }
+                      e.cancelBubble = true
+                    }}
+                  />
+                )
+              }
+
+              // Row gap handles
+              for (let r = 0; r < rows - 1; r++) {
+                const gapY = node.y + (r + 1) * cellH + r * rowGap
+                const gapH = Math.max(rowGap, 0)
+                handles.push(
+                  <Rect
+                    key={`rgap-rect-${nodeId}-${r}`}
+                    x={node.x}
+                    y={gapY}
+                    width={totalW}
+                    height={gapH}
+                    fill="rgba(255,0,255,0.12)"
+                    stroke="rgba(255,0,255,0.35)"
+                    strokeWidth={0.5 / viewport.scale}
+                    listening={false}
+                  />,
+                  <Circle
+                    key={`rgap-handle-${nodeId}-${r}`}
+                    x={node.x + totalW / 2}
+                    y={gapY + gapH / 2}
+                    radius={handleR}
+                    fill="#0d99ff"
+                    stroke="#ffffff"
+                    strokeWidth={1 / viewport.scale}
+                    onMouseDown={(e) => {
+                      const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
+                      gapDragRef.current = { startPointerX: pos.x, startPointerY: pos.y, startGap: rowGap, axis: 'row', nodeId }
+                      e.cancelBubble = true
+                    }}
+                  />
+                )
+              }
+
+              return <React.Fragment key={`grid-handles-${nodeId}`}>{handles}</React.Fragment>
+            })}
           </Group>
 
           <Transformer

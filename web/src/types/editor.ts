@@ -79,11 +79,12 @@ export interface CanvasNodeBase {
   parentId: string | null
   cncMetadata?: CncMetadata
   renderHint?: RenderHint
+  gridMetadata?: GridMetadata
 }
 
 // ---------- Generator types ----------
 
-export type GeneratorKind = 'tenon' | 'dowelHole'
+export type GeneratorKind = 'tenon' | 'dowelHole' | 'scallopFrame'
 
 export interface TenonParams {
   kind: 'tenon'
@@ -110,10 +111,26 @@ export interface DowelHoleParams {
   outputType: 'contour' | 'pocket'
 }
 
-export type GeneratorParams = TenonParams | DowelHoleParams
+export interface ScallopFrameParams {
+  kind: 'scallopFrame'
+  name: string
+  width: number
+  height: number
+  minScallopSize: number
+  outputType: 'contour' | 'pocket'
+}
+
+export type GeneratorParams = TenonParams | DowelHoleParams | ScallopFrameParams
 
 export interface GeneratorMetadata {
   params: GeneratorParams
+}
+
+export interface GridMetadata {
+  rows: number
+  cols: number
+  rowGap: number
+  colGap: number
 }
 
 // ---------- Node types ----------

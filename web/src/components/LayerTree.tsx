@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SearchField } from '@heroui/react'
-import { ChevronDown, ChevronRight, Sparkles } from '@gravity-ui/icons'
+import { ChevronDown, ChevronRight, LayoutCells, Sparkles } from '@gravity-ui/icons'
 
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
@@ -274,6 +274,11 @@ export function LayerTree() {
                           <Sparkles className="h-3.5 w-3.5" />
                         </span>
                       ) : null}
+                      {node.gridMetadata ? (
+                        <span title="Grid / Repeat" className="text-primary/70">
+                          <LayoutCells className="h-3.5 w-3.5" />
+                        </span>
+                      ) : null}
                       <span className="min-w-[3rem] text-right text-xs text-muted-foreground">
                         {isGroup ? `${childCount} parts` : NODE_TYPE_LABEL[node.type]}
                       </span>
@@ -459,6 +464,11 @@ function TreeNode({
           {isGroup && (node as GroupNode).generatorMetadata ? (
             <span title="Parametric generator" className="text-primary/70">
               <Sparkles className="h-3 w-3" />
+            </span>
+          ) : null}
+          {node.gridMetadata ? (
+            <span title="Grid / Repeat" className="text-primary/70">
+              <LayoutCells className="h-3 w-3" />
             </span>
           ) : null}
           <span className="min-w-[2.5rem] text-right text-xs text-muted-foreground">{typeTag}</span>
