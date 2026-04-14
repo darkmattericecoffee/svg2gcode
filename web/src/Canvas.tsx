@@ -288,7 +288,11 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const artboardTargetRef = useRef<Konva.Rect | null>(null)
   const nodeRefs = useRef(new Map<string, Konva.Node>())
   const dragStartPositions = useRef<Record<string, { x: number; y: number }>>({})
-  const gapDragRef = useRef<{ startPointerX: number; startPointerY: number; startGap: number; axis: 'col' | 'row'; nodeId: string } | null>(null)
+  const gapDragRef = useRef<
+    | { kind: 'grid'; startPointerX: number; startPointerY: number; startGap: number; axis: 'col' | 'row'; nodeId: string }
+    | { kind: 'generator'; startPointerX: number; startPointerY: number; startSpacing: number; axis: 'col' | 'row'; nodeId: string; minSpacing: number }
+    | null
+  >(null)
   const isAltKeyDownRef = useRef(false)
   const isDuplicateDragRef = useRef(false)
   const marqueeStartRef = useRef<Point | null>(null)
@@ -809,13 +813,33 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     if (gapDragRef.current) {
       const pos = stage.getPointerPosition()
       if (pos) {
-        const { startPointerX, startPointerY, startGap, axis, nodeId } = gapDragRef.current
-        if (axis === 'col') {
-          const dx = pos.x - startPointerX
-          updateGridMetadata(nodeId, { colGap: Math.max(0, startGap + dx / viewport.scale) })
-        } else {
-          const dy = pos.y - startPointerY
-          updateGridMetadata(nodeId, { rowGap: Math.max(0, startGap + dy / viewport.scale) })
+        const drag = gapDragRef.current
+        if (drag.kind === 'grid') {
+          const { startPointerX, startPointerY, startGap, axis, nodeId } = drag
+          if (axis === 'col') {
+            const dx = pos.x - startPointerX
+            updateGridMetadata(nodeId, { colGap: Math.max(0, startGap + dx / viewport.scale) })
+          } else {
+            const dy = pos.y - startPointerY
+            updateGridMetadata(nodeId, { rowGap: Math.max(0, startGap + dy / viewport.scale) })
+          }
+        } else if (drag.kind === 'generator') {
+          const { startPointerX, startPointerY, startSpacing, axis, nodeId, minSpacing } = drag
+          const genNode = nodesById[nodeId]
+          if (genNode?.type === 'group' && (genNode as GroupNode).generatorMetadata) {
+            const params = (genNode as GroupNode).generatorMetadata!.params
+            if ('colSpacing' in params) {
+              if (axis === 'col') {
+                const dx = pos.x - startPointerX
+                const newSpacing = Math.max(minSpacing, startSpacing + dx / viewport.scale)
+                updateGeneratorParams(nodeId, { ...params, colSpacing: newSpacing }, { skipHistory: true })
+              } else {
+                const dy = pos.y - startPointerY
+                const newSpacing = Math.max(minSpacing, startSpacing + dy / viewport.scale)
+                updateGeneratorParams(nodeId, { ...params, rowSpacing: newSpacing }, { skipHistory: true })
+              }
+            }
+          }
         }
       }
       return
@@ -1502,8 +1526,10 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                 }
                 const ns = getNodeSize(node, nodesById)
                 const { rows, cols, rowGap, colGap } = grid
-                const cellW = ns.width
-                const cellH = ns.height
+                // Live resize: read scale from Konva ref while transformer is active
+                const liveKnGrid = transformTick > 0 && selectedIds.includes(nodeId) ? nodeRefs.current.get(nodeId) : null
+                const cellW = liveKnGrid ? ns.baseWidth * Math.abs(liveKnGrid.scaleX()) : ns.width
+                const cellH = liveKnGrid ? ns.baseHeight * Math.abs(liveKnGrid.scaleY()) : ns.height
                 const copies: React.ReactNode[] = []
                 for (let r = 0; r < rows; r++) {
                   for (let c = 0; c < cols; c++) {
@@ -1546,8 +1572,12 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
               if (!grid) return null
               const ns = getNodeSize(node, nodesById)
               const { rows, cols, rowGap, colGap } = grid
-              const cellW = ns.width
-              const cellH = ns.height
+              // Live resize: read scale/position from Konva ref while transformer is active
+              const liveKnHandle = transformTick > 0 ? nodeRefs.current.get(nodeId) : null
+              const cellW = liveKnHandle ? ns.baseWidth * Math.abs(liveKnHandle.scaleX()) : ns.width
+              const cellH = liveKnHandle ? ns.baseHeight * Math.abs(liveKnHandle.scaleY()) : ns.height
+              const nodeX = liveKnHandle ? liveKnHandle.x() : node.x
+              const nodeY = liveKnHandle ? liveKnHandle.y() : node.y
               const totalW = cols * cellW + (cols - 1) * colGap
               const totalH = rows * cellH + (rows - 1) * rowGap
               const handleR = 5 / viewport.scale
@@ -1555,13 +1585,13 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
               // Column gap handles
               for (let c = 0; c < cols - 1; c++) {
-                const gapX = node.x + (c + 1) * cellW + c * colGap
+                const gapX = nodeX + (c + 1) * cellW + c * colGap
                 const gapW = Math.max(colGap, 0)
                 handles.push(
                   <Rect
                     key={`cgap-rect-${nodeId}-${c}`}
                     x={gapX}
-                    y={node.y}
+                    y={nodeY}
                     width={gapW}
                     height={totalH}
                     fill="rgba(255,0,255,0.12)"
@@ -1572,14 +1602,14 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                   <Circle
                     key={`cgap-handle-${nodeId}-${c}`}
                     x={gapX + gapW / 2}
-                    y={node.y + totalH / 2}
+                    y={nodeY + totalH / 2}
                     radius={handleR}
                     fill="#0d99ff"
                     stroke="#ffffff"
                     strokeWidth={1 / viewport.scale}
                     onMouseDown={(e) => {
                       const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
-                      gapDragRef.current = { startPointerX: pos.x, startPointerY: pos.y, startGap: colGap, axis: 'col', nodeId }
+                      gapDragRef.current = { kind: 'grid', startPointerX: pos.x, startPointerY: pos.y, startGap: colGap, axis: 'col', nodeId }
                       e.cancelBubble = true
                     }}
                   />
@@ -1588,12 +1618,12 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
               // Row gap handles
               for (let r = 0; r < rows - 1; r++) {
-                const gapY = node.y + (r + 1) * cellH + r * rowGap
+                const gapY = nodeY + (r + 1) * cellH + r * rowGap
                 const gapH = Math.max(rowGap, 0)
                 handles.push(
                   <Rect
                     key={`rgap-rect-${nodeId}-${r}`}
-                    x={node.x}
+                    x={nodeX}
                     y={gapY}
                     width={totalW}
                     height={gapH}
@@ -1604,6 +1634,91 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                   />,
                   <Circle
                     key={`rgap-handle-${nodeId}-${r}`}
+                    x={nodeX + totalW / 2}
+                    y={gapY + gapH / 2}
+                    radius={handleR}
+                    fill="#0d99ff"
+                    stroke="#ffffff"
+                    strokeWidth={1 / viewport.scale}
+                    onMouseDown={(e) => {
+                      const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
+                      gapDragRef.current = { kind: 'grid', startPointerX: pos.x, startPointerY: pos.y, startGap: rowGap, axis: 'row', nodeId }
+                      e.cancelBubble = true
+                    }}
+                  />
+                )
+              }
+
+              return <React.Fragment key={`grid-handles-${nodeId}`}>{handles}</React.Fragment>
+            })}
+
+            {/* Generator spacing handles for selected tenon/dowelHole nodes */}
+            {selectedIds.map((nodeId) => {
+              const node = nodesById[nodeId]
+              if (node?.type !== 'group') return null
+              const gMeta = (node as GroupNode).generatorMetadata
+              if (!gMeta) return null
+              const params = gMeta.params
+              if (params.kind !== 'tenon' && params.kind !== 'dowelHole') return null
+              const { rowCount, colCount, rowSpacing, colSpacing } = params
+              const itemW = params.kind === 'tenon' ? params.width : params.diameter
+              const itemH = params.kind === 'tenon' ? params.height : params.diameter
+              const totalW = (colCount - 1) * colSpacing + itemW
+              const totalH = (rowCount - 1) * rowSpacing + itemH
+              const handleR = 5 / viewport.scale
+              const handles: React.ReactNode[] = []
+
+              // Column spacing handles (between columns)
+              for (let c = 0; c < colCount - 1; c++) {
+                const gapX = node.x + c * colSpacing + itemW
+                const gapW = Math.max(colSpacing - itemW, 0)
+                handles.push(
+                  <Rect
+                    key={`gen-cgap-rect-${nodeId}-${c}`}
+                    x={gapX}
+                    y={node.y}
+                    width={gapW}
+                    height={totalH}
+                    fill="rgba(255,0,255,0.12)"
+                    stroke="rgba(255,0,255,0.35)"
+                    strokeWidth={0.5 / viewport.scale}
+                    listening={false}
+                  />,
+                  <Circle
+                    key={`gen-cgap-handle-${nodeId}-${c}`}
+                    x={gapX + gapW / 2}
+                    y={node.y + totalH / 2}
+                    radius={handleR}
+                    fill="#0d99ff"
+                    stroke="#ffffff"
+                    strokeWidth={1 / viewport.scale}
+                    onMouseDown={(e) => {
+                      const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
+                      gapDragRef.current = { kind: 'generator', startPointerX: pos.x, startPointerY: pos.y, startSpacing: colSpacing, axis: 'col', nodeId, minSpacing: itemW }
+                      e.cancelBubble = true
+                    }}
+                  />
+                )
+              }
+
+              // Row spacing handles (between rows)
+              for (let r = 0; r < rowCount - 1; r++) {
+                const gapY = node.y + r * rowSpacing + itemH
+                const gapH = Math.max(rowSpacing - itemH, 0)
+                handles.push(
+                  <Rect
+                    key={`gen-rgap-rect-${nodeId}-${r}`}
+                    x={node.x}
+                    y={gapY}
+                    width={totalW}
+                    height={gapH}
+                    fill="rgba(255,0,255,0.12)"
+                    stroke="rgba(255,0,255,0.35)"
+                    strokeWidth={0.5 / viewport.scale}
+                    listening={false}
+                  />,
+                  <Circle
+                    key={`gen-rgap-handle-${nodeId}-${r}`}
                     x={node.x + totalW / 2}
                     y={gapY + gapH / 2}
                     radius={handleR}
@@ -1612,14 +1727,14 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                     strokeWidth={1 / viewport.scale}
                     onMouseDown={(e) => {
                       const pos = stageRef.current?.getPointerPosition() ?? { x: 0, y: 0 }
-                      gapDragRef.current = { startPointerX: pos.x, startPointerY: pos.y, startGap: rowGap, axis: 'row', nodeId }
+                      gapDragRef.current = { kind: 'generator', startPointerX: pos.x, startPointerY: pos.y, startSpacing: rowSpacing, axis: 'row', nodeId, minSpacing: itemH }
                       e.cancelBubble = true
                     }}
                   />
                 )
               }
 
-              return <React.Fragment key={`grid-handles-${nodeId}`}>{handles}</React.Fragment>
+              return <React.Fragment key={`gen-handles-${nodeId}`}>{handles}</React.Fragment>
             })}
           </Group>
 

@@ -1,4 +1,4 @@
-import { Button, Label, ProgressBar } from '@heroui/react'
+import { Button, ButtonGroup, Dropdown, Label, ProgressBar } from '@heroui/react'
 import type { JobProgress, GenerateJobResponse } from '@svg2gcode/bridge'
 import ArrowDownToSquareIcon from '@gravity-ui/icons/esm/ArrowDownToSquare.js'
 import SparklesIcon from '@gravity-ui/icons/esm/Sparkles.js'
@@ -10,7 +10,9 @@ interface TopBarProps {
   viewMode: ViewMode
   onViewModeChange: (mode: ViewMode) => void
   onGenerateGcode: () => void
-  onDownloadGcode: () => void
+  onDownloadGcode: (format: 'nc' | 'gcode') => void
+  downloadFormat: 'nc' | 'gcode'
+  onDownloadFormatChange: (format: 'nc' | 'gcode') => void
   isGenerating?: boolean
   progress?: JobProgress | null
   hasGcodeResult?: boolean
@@ -62,6 +64,8 @@ export function TopBar({
   onViewModeChange,
   onGenerateGcode,
   onDownloadGcode,
+  downloadFormat,
+  onDownloadFormatChange,
   isGenerating,
   progress,
   hasGcodeResult,
@@ -130,15 +134,42 @@ export function TopBar({
             <AppIcon icon={SparklesIcon} className="h-4 w-4" />
             Make GCode
           </Button>
-          <Button
-            className="rounded-full bg-emerald-600 px-3 gap-1.5 text-[14px] font-medium text-white hover:bg-emerald-500 disabled:bg-emerald-900/40 disabled:text-white/35"
-            size="sm"
-            isDisabled={isGenerating || !hasGcodeResult}
-            onPress={onDownloadGcode}
+          <ButtonGroup
+            className="rounded-full"
           >
-            <AppIcon icon={ArrowDownToSquareIcon} className="h-4 w-4" />
-            Download
-          </Button>
+            <Button
+              className="rounded-l-full bg-emerald-600 px-3 gap-1.5 text-[14px] font-medium text-white hover:bg-emerald-500 disabled:bg-emerald-900/40 disabled:text-white/35"
+              size="sm"
+              isDisabled={isGenerating || !hasGcodeResult}
+              onPress={() => onDownloadGcode(downloadFormat)}
+            >
+              <AppIcon icon={ArrowDownToSquareIcon} className="h-4 w-4" />
+              Export .{downloadFormat}
+            </Button>
+            <Dropdown>
+              <Button
+                isIconOnly
+                aria-label="Choose export format"
+                size="sm"
+                className="rounded-r-full bg-emerald-600 px-2 text-white hover:bg-emerald-500 disabled:bg-emerald-900/40 disabled:text-white/35"
+                isDisabled={isGenerating || !hasGcodeResult}
+              >
+                <span className="text-[11px] font-bold leading-none">···</span>
+              </Button>
+              <Dropdown.Popover placement="bottom end">
+                <Dropdown.Menu
+                  onAction={(key) => {
+                    const fmt = key as 'nc' | 'gcode'
+                    onDownloadFormatChange(fmt)
+                    onDownloadGcode(fmt)
+                  }}
+                >
+                  <Dropdown.Item id="nc">Export as .nc</Dropdown.Item>
+                  <Dropdown.Item id="gcode">Export as .gcode</Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown.Popover>
+            </Dropdown>
+          </ButtonGroup>
         </div>
 
         {/* Expandable status area */}

@@ -48,6 +48,7 @@ function App() {
   const [materialPreset, setMaterialPreset] = useState<MaterialPreset>(DEFAULT_MATERIAL)
   const [isDragOver, setIsDragOver] = useState(false)
   const [isInitializingPreview, setIsInitializingPreview] = useState(false)
+  const [downloadFormat, setDownloadFormat] = useState<'nc' | 'gcode'>('nc')
 
   const isCanvasEmpty = rootIds.length === 0
 
@@ -151,7 +152,7 @@ function App() {
     await gcode.generate()
   }
 
-  const handleDownloadGcode = () => {
+  const handleDownloadGcode = (format: 'nc' | 'gcode' = downloadFormat) => {
     const state = useEditorStore.getState()
     const { machiningSettings, artboard: ab } = state
     // Prefer preview gcodeText (already has tabs). Fall back to raw gcode with
@@ -166,7 +167,10 @@ function App() {
       })
     }
     if (text) {
-      gcode.downloadGcode(text, `${projectName || 'output'}.gcode`)
+      const diameter = machiningSettings.toolDiameter
+      const diameterStr = Number.isInteger(diameter) ? `${diameter}` : diameter.toFixed(2).replace(/\.?0+$/, '')
+      const header = `; tool_diameter = ${diameterStr} mm\n`
+      gcode.downloadGcode(header + text, `${projectName || 'output'}.${format}`)
     }
   }
 
@@ -307,6 +311,8 @@ function App() {
               onViewModeChange={handleViewModeChange}
               onGenerateGcode={handleGenerateGcode}
               onDownloadGcode={handleDownloadGcode}
+              downloadFormat={downloadFormat}
+              onDownloadFormatChange={setDownloadFormat}
               isGenerating={gcode.isGenerating}
               progress={gcode.progress}
               hasGcodeResult={!!gcode.result}

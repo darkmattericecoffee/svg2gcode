@@ -1,10 +1,11 @@
-import { Button } from '@heroui/react'
+import { useState } from 'react'
+import { Button, ButtonGroup, Dropdown } from '@heroui/react'
 
 import type { GcodeGenerationState } from '../hooks/useGcodeGeneration'
 
 interface GenerateGcodePanelProps {
   state: GcodeGenerationState
-  onDownload: () => void
+  onDownload: (format: 'nc' | 'gcode') => void
   onDismiss: () => void
 }
 
@@ -46,6 +47,7 @@ function progressPercent(state: GcodeGenerationState): number {
 }
 
 export function GenerateGcodePanel({ state, onDownload, onDismiss }: GenerateGcodePanelProps) {
+  const [downloadFormat, setDownloadFormat] = useState<'nc' | 'gcode'>('nc')
   if (state.isGenerating) {
     const percent = progressPercent(state)
     return (
@@ -100,13 +102,37 @@ export function GenerateGcodePanel({ state, onDownload, onDismiss }: GenerateGco
         )}
 
         <div className="flex gap-2">
-          <Button
-            size="sm"
-            className="rounded-full bg-emerald-600 text-[13px] font-medium text-white hover:bg-emerald-500"
-            onPress={onDownload}
-          >
-            Download .gcode
-          </Button>
+          <ButtonGroup className="rounded-full">
+            <Button
+              size="sm"
+              className="rounded-l-full bg-emerald-600 text-[13px] font-medium text-white hover:bg-emerald-500"
+              onPress={() => onDownload(downloadFormat)}
+            >
+              Export .{downloadFormat}
+            </Button>
+            <Dropdown>
+              <Button
+                isIconOnly
+                aria-label="Choose export format"
+                size="sm"
+                className="rounded-r-full bg-emerald-600 px-2 text-white hover:bg-emerald-500"
+              >
+                <span className="text-[11px] font-bold leading-none">···</span>
+              </Button>
+              <Dropdown.Popover placement="bottom end">
+                <Dropdown.Menu
+                  onAction={(key) => {
+                    const fmt = key as 'nc' | 'gcode'
+                    setDownloadFormat(fmt)
+                    onDownload(fmt)
+                  }}
+                >
+                  <Dropdown.Item id="nc">Export as .nc</Dropdown.Item>
+                  <Dropdown.Item id="gcode">Export as .gcode</Dropdown.Item>
+                </Dropdown.Menu>
+              </Dropdown.Popover>
+            </Dropdown>
+          </ButtonGroup>
           <Button
             size="sm"
             className="rounded-full text-[13px] text-white"

@@ -79,6 +79,27 @@ export async function editorStateToArtObjects(
         const cellCanvasY = rootNode.y + r * (nodeSize.height + rowGap)
         artObject.placementY = artboard.height - cellCanvasY - nodeSize.height
 
+        // For generator nodes and synthesized shapes (no originalSvg), getSvgTextForNode
+        // calls exportToSVG with an artboard-sized viewport (e.g. viewBox="0 0 600 500").
+        // parseSvgDocumentMetrics then sets svgMetrics.width=600 instead of the shape's
+        // actual coordinate width (~100mm), causing composeArtObjectsSvg to compute
+        // scaleX = widthMm / 600 ≈ 0.17 — squashing the shape and corrupting its position.
+        // Fix: override svgMetrics so that width/height match the actual path coordinate
+        // extents (= baseWidth/baseHeight, which equal the mm dimensions since generator
+        // path coordinates are in mm and scaleX is always 1 after parametric resize).
+        const hasOriginalSvg = isGroupNode(rootNode) && Boolean((rootNode as GroupNode).originalSvg)
+        if (!hasOriginalSvg && nodeSize.baseWidth > 0 && nodeSize.baseHeight > 0) {
+          artObject.svgMetrics = {
+            x: 0,
+            y: 0,
+            width: nodeSize.baseWidth,
+            height: nodeSize.baseHeight,
+            widthMm: nodeSize.width,
+            heightMm: nodeSize.height,
+            aspectRatio: nodeSize.width / nodeSize.height,
+          }
+        }
+
         applyEditorCncMetadata(artObject, rootNode, nodesById, machiningSettings)
         artObjects.push(artObject)
       }
