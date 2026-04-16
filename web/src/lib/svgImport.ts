@@ -655,6 +655,7 @@ const normalizeSubtree = (
   nodesById: Record<string, CanvasNode>,
   boundsById: Record<string, Bounds>,
   preserveRootOrigin = false,
+  preShiftOut?: { bounds: Bounds | null },
 ): Bounds | null => {
   const node = nodesById[nodeId]
   if (!node) {
@@ -672,6 +673,10 @@ const normalizeSubtree = (
   const union = unionBounds(childBounds)
   if (!union) {
     return null
+  }
+
+  if (preShiftOut) {
+    preShiftOut.bounds = { ...union }
   }
 
   node.childIds.forEach((childId) => {
@@ -698,6 +703,46 @@ const normalizeSubtree = (
 
   boundsById[nodeId] = normalized
   return normalized
+}
+
+const buildNormalizedSvgText = (
+  originalSvgText: string,
+  contentOrigin: { x: number; y: number },
+  width: number,
+  height: number,
+): string => {
+  try {
+    const doc = new DOMParser().parseFromString(originalSvgText, 'image/svg+xml')
+    if (doc.querySelector('parsererror')) return originalSvgText
+    const svg = doc.documentElement
+    if (!svg || svg.tagName.toLowerCase() !== 'svg') return originalSvgText
+
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`)
+    svg.setAttribute('width', String(width))
+    svg.setAttribute('height', String(height))
+
+    const wrapper = doc.createElementNS(SVG_NS, 'g')
+    wrapper.setAttribute(
+      'transform',
+      `translate(${-contentOrigin.x} ${-contentOrigin.y})`,
+    )
+
+    // Move content children into the wrapper, but keep <defs>/<style> at
+    // the root so id/class references continue to resolve.
+    const children = Array.from(svg.childNodes)
+    children.forEach((child) => {
+      if (child.nodeType === 1) {
+        const tag = (child as Element).tagName.toLowerCase()
+        if (tag === 'defs' || tag === 'style' || tag === 'metadata') return
+      }
+      wrapper.appendChild(child)
+    })
+    svg.appendChild(wrapper)
+
+    return new XMLSerializer().serializeToString(doc)
+  } catch {
+    return originalSvgText
+  }
 }
 
 function readProjectMetadata(rootElement: Element): ProjectMetadata | undefined {
@@ -1002,7 +1047,14 @@ export function importSvgToScene({
       )
     }
 
-    const normalizedBounds = normalizeSubtree(rootId, nodesById, boundsById, true)
+    const preShiftCapture: { bounds: Bounds | null } = { bounds: null }
+    const normalizedBounds = normalizeSubtree(
+      rootId,
+      nodesById,
+      boundsById,
+      true,
+      preShiftCapture,
+    )
     if (
       !normalizedBounds ||
       (normalizedBounds.width <= 0 && normalizedBounds.height <= 0)
@@ -1029,13 +1081,23 @@ export function importSvgToScene({
     rootNode.scaleY = fitScale
     rootNode.name = fileName.replace(/\.svg$/i, '') || rootNode.name
 
+    const contentOrigin = preShiftCapture.bounds
+      ? { x: preShiftCapture.bounds.x, y: preShiftCapture.bounds.y }
+      : { x: 0, y: 0 }
+    const normalizedOriginalSvg = buildNormalizedSvgText(
+      svgText,
+      contentOrigin,
+      effectiveWidth,
+      effectiveHeight,
+    )
+
     return {
       nodesById,
       rootId,
       width: effectiveWidth * fitScale,
       height: effectiveHeight * fitScale,
       name: rootNode.name,
-      originalSvg: svgText,
+      originalSvg: normalizedOriginalSvg,
       projectMetadata,
     }
   } finally {
