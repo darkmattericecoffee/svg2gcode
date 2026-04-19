@@ -117,6 +117,11 @@ export interface ElementAssignment {
   targetDepthMm: number;
   engraveType: EngraveType | null;
   fillMode: FillMode | null;
+  /** Group id (from the editor's SVG tree) that batches this element with its siblings for cutting.
+   *  Elements sharing a cutOrderGroupId are emitted as one contiguous FrontendOperation. */
+  cutOrderGroupId?: string;
+  /** Global 0-based sort index across every element; used to order operations to minimize wander. */
+  cutOrderIndex?: number;
 }
 
 export interface AssignmentProfileGroup {
@@ -126,6 +131,10 @@ export interface AssignmentProfileGroup {
   fillMode: FillMode | null;
   elementIds: string[];
   color: string;
+  /** The SVG group id that batches these elements (set when cut-order data is available). */
+  cutOrderGroupId?: string;
+  /** Minimum cut-order index across this group's elements; drives operation ordering. */
+  minCutOrderIndex?: number;
 }
 
 export interface GenerateJobRequest {

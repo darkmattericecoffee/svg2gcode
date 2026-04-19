@@ -610,6 +610,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     optimizePathOrder: true,
     clusterDetourRadius: 5,
     circularInterpolation: true,
+    cutOrderStrategy: 'ltr',
+    manualCutOrder: null,
   },
   viewport: initialViewport,
   ui: {

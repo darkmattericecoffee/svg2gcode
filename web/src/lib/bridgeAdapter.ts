@@ -23,6 +23,7 @@ import { getSubtreeIds, isGroupNode } from "./editorTree"
 import { getNodeSize } from "./nodeDimensions"
 import { exportToSVG } from "./svgExport"
 import { buildBridgeSettings, resolveEffectiveMaxStepdown } from "./bridgeSettingsAdapter"
+import { computeCutOrder, type CutOrderResult } from "./cutOrder"
 
 /**
  * Convert the editor's canvas state into bridge ArtObjects for GCode generation.
@@ -44,6 +45,14 @@ export async function editorStateToArtObjects(
 ): Promise<ArtObject[]> {
   const settings = buildBridgeSettings(baseSettings, artboard, machiningSettings)
   const artObjects: ArtObject[] = []
+
+  const cutOrder = computeCutOrder(
+    rootIds,
+    nodesById,
+    machiningSettings.cutOrderStrategy,
+    machiningSettings.manualCutOrder,
+  )
+  const cutOrderLookup = buildCutOrderLookup(cutOrder)
 
   for (const rootId of rootIds) {
     const rootNode = nodesById[rootId]
@@ -117,6 +126,8 @@ export async function editorStateToArtObjects(
           exportInfo.metadataRootNode,
           exportInfo.metadataNodesById,
           machiningSettings,
+          cutOrderLookup,
+          artObjects.length,
         )
         artObjects.push(artObject)
       }
@@ -124,6 +135,21 @@ export async function editorStateToArtObjects(
   }
 
   return artObjects
+}
+
+interface CutOrderLookup {
+  indexByNodeId: Map<string, number>
+  groupIdByNodeId: Map<string, string>
+}
+
+function buildCutOrderLookup(cutOrder: CutOrderResult): CutOrderLookup {
+  const indexByNodeId = new Map<string, number>()
+  const groupIdByNodeId = new Map<string, string>()
+  for (const leaf of cutOrder.sequence) {
+    indexByNodeId.set(leaf.nodeId, leaf.index)
+    groupIdByNodeId.set(leaf.nodeId, leaf.groupId)
+  }
+  return { indexByNodeId, groupIdByNodeId }
 }
 
 /**
@@ -274,6 +300,8 @@ function applyEditorCncMetadata(
   rootNode: CanvasNode,
   nodesById: Record<string, CanvasNode>,
   machiningSettings: MachiningSettings,
+  cutOrder?: CutOrderLookup,
+  artObjectOrdinal = 0,
 ) {
   // Collect leaf nodes with CNC metadata in document order
   const leafMetadata = collectLeafCncMetadata(rootNode, nodesById)
@@ -287,6 +315,11 @@ function applyEditorCncMetadata(
   const rootDepth = rootNode.cncMetadata?.cutDepth ?? machiningSettings.defaultDepthMm
   const rootEngraveType = resolveDefaultEngraveType(rootNode)
   const rootFillMode = engraveTypeToFillMode(rootEngraveType)
+
+  // Stride ensures different art objects (e.g. grid cells) never interleave even
+  // when their editor-leaf indices coincide.
+  const ordinalStride = 1_000_000
+  const ordinalOffset = artObjectOrdinal * ordinalStride
 
   for (let i = 0; i < compositeIds.length; i++) {
     const compositeId = compositeIds[i]!
@@ -307,10 +340,22 @@ function applyEditorCncMetadata(
       assignment.engraveType = intrinsicEngraveTypes[compositeId] ?? rootEngraveType
       assignment.fillMode = engraveTypeToFillMode(assignment.engraveType) ?? rootFillMode
     }
+
+    if (cutOrder) {
+      const leafNodeId = leafMeta?.nodeId
+      const baseIndex = leafNodeId ? cutOrder.indexByNodeId.get(leafNodeId) : undefined
+      const baseGroupId = leafNodeId ? cutOrder.groupIdByNodeId.get(leafNodeId) : undefined
+      // Scope group id by artObject so grid cells / multiple roots stay separate.
+      assignment.cutOrderGroupId = baseGroupId
+        ? `${artObject.id}::${baseGroupId}`
+        : artObject.id
+      assignment.cutOrderIndex = ordinalOffset + (baseIndex ?? i)
+    }
   }
 }
 
 interface LeafMeta {
+  nodeId: string
   cutDepth: number | undefined
   engraveType: BridgeEngraveType | null
 }
@@ -348,6 +393,7 @@ function collectLeafCncMetadata(
   }
 
   return [{
+    nodeId: node.id,
     cutDepth: metadata.cutDepth,
     engraveType: bridgeType,
   }]

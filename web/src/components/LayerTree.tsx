@@ -5,16 +5,18 @@ import { ChevronDown, ChevronRight, Geo, GeoFill, LayoutCells, Sparkles } from '
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
 import { depthToColor, isGeometricallyOpen, normalizeEngraveType } from '../lib/cncVisuals'
+import { computeCutOrder } from '../lib/cutOrder'
+import { boundsToViewBox, getNodePreviewBounds } from '../lib/nodeBounds'
 import { useEditorStore } from '../store'
+import { CutOrderView } from './CutOrderView'
 import { EditorContextMenu } from './EditorContextMenu'
-import type { CanvasNode, GroupNode, LineNode } from '../types/editor'
+import type { CanvasNode, GroupNode, LineNode, MachiningSettings } from '../types/editor'
 import type { NormalizedEngraveType } from '../lib/cncVisuals'
 
 function cn(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')
 }
 
-const SVG_NS = 'http://www.w3.org/2000/svg'
 const LAYER_PREVIEW_SIZE = 24
 const DEPTH_EPSILON = 0.0001
 
@@ -23,26 +25,6 @@ const ENGRAVE_LABEL: Record<NormalizedEngraveType, string> = {
   pocket: 'Pocket',
   plunge: 'Plunge',
 }
-
-interface Bounds {
-  minX: number
-  minY: number
-  maxX: number
-  maxY: number
-}
-
-interface Matrix {
-  a: number
-  b: number
-  c: number
-  d: number
-  e: number
-  f: number
-}
-
-let measureSvg: SVGSVGElement | null = null
-let measurePath: SVGPathElement | null = null
-const pathBoundsCache = new Map<string, Bounds | null>()
 
 interface LayerCncSummary {
   depth: number | null
@@ -96,7 +78,7 @@ function formatDepth(depth: number): string {
   return `${Number(depth.toFixed(2))} mm`
 }
 
-function buildLayerCncSummary(
+export function buildLayerCncSummary(
   node: CanvasNode,
   nodesById: Record<string, CanvasNode>,
   defaultDepth: number,
@@ -148,7 +130,7 @@ function FillModeIcon({
   )
 }
 
-function LayerCncSummaryTag({
+export function LayerCncSummaryTag({
   summary,
 }: {
   summary: LayerCncSummary
@@ -164,7 +146,7 @@ function LayerCncSummaryTag({
   )
 }
 
-function LayerName({
+export function LayerName({
   node,
   isRenaming,
   draft,
@@ -222,202 +204,6 @@ function LayerName({
       {node.name || node.id}
     </span>
   )
-}
-
-function ensureMeasureElements() {
-  if (measureSvg || typeof document === 'undefined') return
-
-  measureSvg = document.createElementNS(SVG_NS, 'svg')
-  measureSvg.setAttribute('width', '0')
-  measureSvg.setAttribute('height', '0')
-  measureSvg.setAttribute('aria-hidden', 'true')
-  Object.assign(measureSvg.style, {
-    position: 'absolute',
-    left: '-99999px',
-    top: '-99999px',
-    visibility: 'hidden',
-    pointerEvents: 'none',
-  })
-
-  measurePath = document.createElementNS(SVG_NS, 'path')
-  measureSvg.appendChild(measurePath)
-  document.body.appendChild(measureSvg)
-}
-
-function measurePathBounds(data: string): Bounds | null {
-  if (pathBoundsCache.has(data)) {
-    return pathBoundsCache.get(data) ?? null
-  }
-
-  ensureMeasureElements()
-  if (!measurePath) return null
-
-  try {
-    measurePath.setAttribute('d', data)
-    const box = measurePath.getBBox()
-    const bounds = {
-      minX: box.x,
-      minY: box.y,
-      maxX: box.x + box.width,
-      maxY: box.y + box.height,
-    }
-    pathBoundsCache.set(data, bounds)
-    return bounds
-  } catch {
-    pathBoundsCache.set(data, null)
-    return null
-  }
-}
-
-function identityMatrix(): Matrix {
-  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
-}
-
-function multiplyMatrices(left: Matrix, right: Matrix): Matrix {
-  return {
-    a: left.a * right.a + left.c * right.b,
-    b: left.b * right.a + left.d * right.b,
-    c: left.a * right.c + left.c * right.d,
-    d: left.b * right.c + left.d * right.d,
-    e: left.a * right.e + left.c * right.f + left.e,
-    f: left.b * right.e + left.d * right.f + left.f,
-  }
-}
-
-function nodeMatrix(node: CanvasNode): Matrix {
-  const radians = node.rotation * Math.PI / 180
-  const cos = Math.cos(radians)
-  const sin = Math.sin(radians)
-
-  return {
-    a: cos * node.scaleX,
-    b: sin * node.scaleX,
-    c: -sin * node.scaleY,
-    d: cos * node.scaleY,
-    e: node.x,
-    f: node.y,
-  }
-}
-
-function applyMatrix(matrix: Matrix, x: number, y: number): { x: number; y: number } {
-  return {
-    x: matrix.a * x + matrix.c * y + matrix.e,
-    y: matrix.b * x + matrix.d * y + matrix.f,
-  }
-}
-
-function addPoint(bounds: Bounds | null, x: number, y: number): Bounds {
-  if (!bounds) {
-    return { minX: x, minY: y, maxX: x, maxY: y }
-  }
-
-  return {
-    minX: Math.min(bounds.minX, x),
-    minY: Math.min(bounds.minY, y),
-    maxX: Math.max(bounds.maxX, x),
-    maxY: Math.max(bounds.maxY, y),
-  }
-}
-
-function addTransformedRect(
-  bounds: Bounds | null,
-  matrix: Matrix,
-  minX: number,
-  minY: number,
-  maxX: number,
-  maxY: number,
-): Bounds {
-  return [
-    [minX, minY],
-    [maxX, minY],
-    [maxX, maxY],
-    [minX, maxY],
-  ].reduce<Bounds | null>((nextBounds, [x, y]) => {
-    const point = applyMatrix(matrix, x, y)
-    return addPoint(nextBounds, point.x, point.y)
-  }, bounds)!
-}
-
-function strokePadding(strokeWidth?: number): number {
-  return Math.max((strokeWidth ?? 0) / 2, 0.5)
-}
-
-function getNodePreviewBounds(
-  node: CanvasNode,
-  nodesById: Record<string, CanvasNode>,
-  parentMatrix = identityMatrix(),
-): Bounds | null {
-  const matrix = multiplyMatrices(parentMatrix, nodeMatrix(node))
-
-  if (node.type === 'group') {
-    return (node as GroupNode).childIds.reduce<Bounds | null>((bounds, childId) => {
-      const child = nodesById[childId]
-      if (!child) return bounds
-      const childBounds = getNodePreviewBounds(child, nodesById, matrix)
-      if (!childBounds) return bounds
-      return addTransformedRect(
-        bounds,
-        identityMatrix(),
-        childBounds.minX,
-        childBounds.minY,
-        childBounds.maxX,
-        childBounds.maxY,
-      )
-    }, null)
-  }
-
-  if (node.type === 'rect') {
-    const pad = strokePadding(node.strokeWidth)
-    return addTransformedRect(null, matrix, -pad, -pad, node.width + pad, node.height + pad)
-  }
-
-  if (node.type === 'circle') {
-    const pad = strokePadding(node.strokeWidth)
-    return addTransformedRect(null, matrix, -node.radius - pad, -node.radius - pad, node.radius + pad, node.radius + pad)
-  }
-
-  if (node.type === 'line') {
-    if (node.points.length < 2) return null
-    const xs = node.points.filter((_, index) => index % 2 === 0)
-    const ys = node.points.filter((_, index) => index % 2 === 1)
-    const pad = strokePadding(node.strokeWidth)
-    return addTransformedRect(
-      null,
-      matrix,
-      Math.min(...xs) - pad,
-      Math.min(...ys) - pad,
-      Math.max(...xs) + pad,
-      Math.max(...ys) + pad,
-    )
-  }
-
-  const pathBounds = measurePathBounds(node.data)
-  if (!pathBounds) return null
-  const pad = strokePadding(node.strokeWidth)
-  return addTransformedRect(
-    null,
-    matrix,
-    pathBounds.minX - pad,
-    pathBounds.minY - pad,
-    pathBounds.maxX + pad,
-    pathBounds.maxY + pad,
-  )
-}
-
-function boundsToViewBox(bounds: Bounds): string {
-  const width = Math.max(0.001, bounds.maxX - bounds.minX)
-  const height = Math.max(0.001, bounds.maxY - bounds.minY)
-  const span = Math.max(width, height, 1)
-  const padding = Math.max(span * 0.12, 1)
-  const extraX = Math.max(0, span - width) / 2
-  const extraY = Math.max(0, span - height) / 2
-
-  return [
-    bounds.minX - padding - extraX,
-    bounds.minY - padding - extraY,
-    width + padding * 2 + extraX * 2,
-    height + padding * 2 + extraY * 2,
-  ].join(' ')
 }
 
 function nodeTransform(node: CanvasNode): string | undefined {
@@ -536,7 +322,7 @@ function renderPreviewNode(node: CanvasNode, nodesById: Record<string, CanvasNod
   )
 }
 
-function LayerPreview({
+export function LayerPreview({
   node,
   nodesById,
 }: {
@@ -576,7 +362,11 @@ export function LayerTree() {
   const updateNodeTransform = useEditorStore((s) => s.updateNodeTransform)
   const setHoveredId = useEditorStore((s) => s.setHoveredId)
   const defaultDepth = useEditorStore((s) => s.machiningSettings.defaultDepthMm)
+  const cutOrderStrategy = useEditorStore((s) => s.machiningSettings.cutOrderStrategy)
+  const manualCutOrder = useEditorStore((s) => s.machiningSettings.manualCutOrder)
+  const setMachiningSettings = useEditorStore((s) => s.setMachiningSettings)
   const pushHistory = useEditorStore((s) => s.pushHistory)
+  const [view, setView] = useState<'layers' | 'cutOrder'>('layers')
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [lastClickedId, setLastClickedId] = useState<string | null>(null)
@@ -601,6 +391,11 @@ export function LayerTree() {
   const flatList = useMemo(
     () => buildFlatList(rootIds, nodesById, collapsed, query),
     [rootIds, nodesById, collapsed, query],
+  )
+
+  const cutOrder = useMemo(
+    () => computeCutOrder(rootIds, nodesById, cutOrderStrategy, manualCutOrder),
+    [rootIds, nodesById, cutOrderStrategy, manualCutOrder],
   )
 
   useEffect(() => {
@@ -710,6 +505,62 @@ export function LayerTree() {
         }}
         onOpenChange={(isOpen) => setContextMenu((current) => ({ ...current, isOpen }))}
       />
+      <div className="flex items-center gap-1 border-b border-border px-3 pt-3">
+        <button
+          type="button"
+          className={cn(
+            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+            view === 'layers'
+              ? 'bg-[var(--surface-tertiary)] text-foreground'
+              : 'text-muted-foreground hover:bg-[var(--surface-secondary)]',
+          )}
+          onClick={() => setView('layers')}
+        >
+          Layers
+        </button>
+        <button
+          type="button"
+          className={cn(
+            'flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+            view === 'cutOrder'
+              ? 'bg-[var(--surface-tertiary)] text-foreground'
+              : 'text-muted-foreground hover:bg-[var(--surface-secondary)]',
+          )}
+          onClick={() => setView('cutOrder')}
+        >
+          Cut Order
+        </button>
+      </div>
+      {view === 'cutOrder' ? (
+        <div className="border-b border-border px-4 py-3">
+          <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Group ordering</span>
+            <select
+              className="rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+              value={cutOrderStrategy}
+              onChange={(e) =>
+                setMachiningSettings({
+                  cutOrderStrategy: e.target.value as MachiningSettings['cutOrderStrategy'],
+                })
+              }
+            >
+              <option value="svg">SVG order</option>
+              <option value="ltr">Left → Right</option>
+              <option value="btt">Bottom → Top</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+          {cutOrderStrategy === 'manual' && (
+            <button
+              type="button"
+              className="mt-2 text-[11px] text-muted-foreground underline hover:text-foreground"
+              onClick={() => setMachiningSettings({ manualCutOrder: null, cutOrderStrategy: 'ltr' })}
+            >
+              Reset manual order
+            </button>
+          )}
+        </div>
+      ) : (
       <div className="border-b border-border px-4 py-3">
         <SearchField value={query} onChange={setQuery} fullWidth aria-label="Filter art objects">
           <SearchField.Group aria-label="Filter art objects">
@@ -737,7 +588,26 @@ export function LayerTree() {
           </SearchField.Group>
         </SearchField>
       </div>
+      )}
 
+      {view === 'cutOrder' ? (
+        <CutOrderView
+          cutOrder={cutOrder}
+          nodesById={nodesById}
+          selectedIds={selectedIds}
+          defaultDepth={defaultDepth}
+          onSelect={(id, e) => handleRowMouseDown(id, e)}
+          onHover={handleRowMouseEnter}
+          onHoverLeave={handleRowMouseLeave}
+          onContextMenu={handleRowContextMenu}
+          onReorder={(nextOrder) =>
+            setMachiningSettings({
+              cutOrderStrategy: 'manual',
+              manualCutOrder: nextOrder,
+            })
+          }
+        />
+      ) : (
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {filteredRootIds.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-[var(--surface)] px-3 py-3 text-sm text-muted-foreground">
@@ -912,6 +782,7 @@ export function LayerTree() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

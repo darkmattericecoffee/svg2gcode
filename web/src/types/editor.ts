@@ -41,6 +41,10 @@ export interface MachiningSettings {
   clusterDetourRadius: number | null
   /** Emit G2/G3 arcs instead of a polyline of G1s for curves — smaller gcode. */
   circularInterpolation: boolean
+  /** How sibling SVG groups are ordered when computing the cut sequence. */
+  cutOrderStrategy: 'svg' | 'ltr' | 'btt' | 'manual'
+  /** Explicit cut-order override (list of leaf nodeIds) used when strategy === 'manual'. */
+  manualCutOrder: string[] | null
 }
 
 export interface ViewportState {

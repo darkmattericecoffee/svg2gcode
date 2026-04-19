@@ -2003,25 +2003,45 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
         cb(0, 0, "optimizing");
     }
 
+    // Preserve the operation order emitted by the frontend (which now encodes
+    // SVG-group cut ordering with a spatial bias). Within each depth bucket the
+    // bucket vec is already in operation iteration order because
+    // `schedule_operation_groups_by_depth` .extend()'s in that order. Running
+    // the nearest-neighbor pass *across* operations would shuffle shapes from
+    // different SVG groups into each other, which defeats the whole point —
+    // the hand-held CNC drifts when the tool hops across the workpiece. We
+    // therefore chunk the bucket into contiguous runs sharing the same
+    // operation id and TSP-optimize only *inside* each chunk.
     let mut current = Point::new(0.0, 0.0);
     for (_depth_key, groups) in scheduled_groups {
-        let (ordered_groups, next_current) =
-            optimize_scheduled_operation_groups_from(groups, current);
-        current = next_current;
-        for scheduled in ordered_groups {
-            append_operation_start_marker(
-                &mut program,
-                &scheduled.operation_id,
-                &scheduled.operation_name,
-            );
-            append_engraving_paths(
-                &mut program,
-                &mut machine,
-                engraving,
-                vec![scheduled.group],
-                config.tolerance,
-            );
-            append_operation_end_marker(&mut program, &scheduled.operation_id);
+        let mut cursor = 0;
+        while cursor < groups.len() {
+            let op_id = groups[cursor].operation_id.clone();
+            let mut end = cursor + 1;
+            while end < groups.len() && groups[end].operation_id == op_id {
+                end += 1;
+            }
+            let chunk: Vec<ScheduledOperationGroup> = groups[cursor..end].to_vec();
+            cursor = end;
+
+            let (ordered_groups, next_current) =
+                optimize_scheduled_operation_groups_from(chunk, current);
+            current = next_current;
+            for scheduled in ordered_groups {
+                append_operation_start_marker(
+                    &mut program,
+                    &scheduled.operation_id,
+                    &scheduled.operation_name,
+                );
+                append_engraving_paths(
+                    &mut program,
+                    &mut machine,
+                    engraving,
+                    vec![scheduled.group],
+                    config.tolerance,
+                );
+                append_operation_end_marker(&mut program, &scheduled.operation_id);
+            }
         }
     }
 

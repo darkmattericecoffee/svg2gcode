@@ -7,8 +7,10 @@ export function getAssignmentProfileKey(
   targetDepthMm: number,
   fillMode: FillMode | null,
   engraveType: ElementAssignment["engraveType"],
+  cutOrderGroupId?: string,
 ) {
-  return `${targetDepthMm}::${engraveType ?? "default"}::${fillMode ?? "default"}`;
+  const groupPart = cutOrderGroupId ?? "default";
+  return `${groupPart}::${targetDepthMm}::${engraveType ?? "default"}::${fillMode ?? "default"}`;
 }
 
 export function groupAssignmentsForIds(
@@ -22,6 +24,8 @@ export function groupAssignmentsForIds(
       engraveType: ElementAssignment["engraveType"];
       fillMode: FillMode | null;
       elementIds: string[];
+      cutOrderGroupId?: string;
+      minCutOrderIndex?: number;
     }
   >();
 
@@ -33,16 +37,24 @@ export function groupAssignmentsForIds(
 
     const engraveType = assignment.engraveType ?? fillModeToEngraveType(assignment.fillMode);
     const fillMode = assignment.fillMode ?? engraveTypeToFillMode(engraveType);
-    const key = getAssignmentProfileKey(assignment.targetDepthMm, fillMode, engraveType);
+    const cutOrderGroupId = assignment.cutOrderGroupId;
+    const key = getAssignmentProfileKey(assignment.targetDepthMm, fillMode, engraveType, cutOrderGroupId);
     const existing = groups.get(key);
     if (existing) {
       existing.elementIds.push(elementId);
+      if (assignment.cutOrderIndex != null) {
+        existing.minCutOrderIndex = existing.minCutOrderIndex == null
+          ? assignment.cutOrderIndex
+          : Math.min(existing.minCutOrderIndex, assignment.cutOrderIndex);
+      }
     } else {
       groups.set(key, {
         targetDepthMm: assignment.targetDepthMm,
         engraveType,
         fillMode,
         elementIds: [elementId],
+        cutOrderGroupId,
+        minCutOrderIndex: assignment.cutOrderIndex,
       });
     }
   }
@@ -55,8 +67,18 @@ export function groupAssignmentsForIds(
       fillMode: group.fillMode,
       elementIds: group.elementIds,
       color: colorForOperation(index),
+      cutOrderGroupId: group.cutOrderGroupId,
+      minCutOrderIndex: group.minCutOrderIndex,
     }))
     .sort((left, right) => {
+      // When cut-order data is present, honour it first — this is what preserves
+      // the SVG-group clustering requested by the user. Depth is secondary so
+      // the multi-pass step-down per group still runs deep→shallow inside a group.
+      const leftIdx = left.minCutOrderIndex;
+      const rightIdx = right.minCutOrderIndex;
+      if (leftIdx != null && rightIdx != null && leftIdx !== rightIdx) {
+        return leftIdx - rightIdx;
+      }
       if (left.targetDepthMm !== right.targetDepthMm) {
         return left.targetDepthMm - right.targetDepthMm;
       }
