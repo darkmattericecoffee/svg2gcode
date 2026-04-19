@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import type Konva from 'konva'
 import type { KonvaEventObject } from 'konva/lib/Node'
 import { Circle, Group, Line, Path, Rect } from 'react-konva'
@@ -82,7 +82,6 @@ interface SharedShapeProps {
   hitboxOnly?: boolean
   parentCncMetadata?: CncMetadata
   toolDiameter?: number
-  viewportScale?: number
   registerNodeRef: (nodeId: string, node: Konva.Node | null) => void
   onPointerDown: (event: KonvaEventObject<MouseEvent | TouchEvent>) => void
   onClick: (event: KonvaEventObject<MouseEvent | TouchEvent>) => void
@@ -160,7 +159,6 @@ function SvgPathNode({
   outlineOnly,
   parentCncMetadata,
   toolDiameter,
-  viewportScale,
   registerNodeRef,
   onPointerDown,
   onClick,
@@ -174,7 +172,7 @@ function SvgPathNode({
     : {}
   const isOpenPath = toolDiameter != null && isOpenPathNode(node)
   const useCncStroke = isOpenPath && showCncOverrides !== false
-  const cncStrokeWidth = toolDiameter != null && viewportScale ? toolDiameter / viewportScale : toolDiameter
+  const cncStrokeWidth = toolDiameter
   const baseStrokeWidth = useCncStroke ? cncStrokeWidth! : node.strokeWidth
   const baseStroke = useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke
   const visualProps = Object.assign(
@@ -210,10 +208,7 @@ function SvgPathNode({
   const plungeRadius = plungeDiameter / 2
   const plungeCenterX = renderHint?.centerX ?? plungeRadius
   const plungeCenterY = renderHint?.centerY ?? plungeRadius
-  const plungeHitRadius = Math.max(
-    plungeRadius,
-    MIN_PLUNGE_HIT_DIAMETER_PX / Math.max((viewportScale ?? 1) * 2, 0.0001),
-  )
+  const plungeHitRadius = plungeRadius
 
   if (isPlunge && plungeRadius > 0) {
     const neutralStroke = isSelected ? '#0d99ff' : 'rgba(74, 52, 30, 0.72)'
@@ -253,7 +248,9 @@ function SvgPathNode({
           y={plungeCenterY}
           radius={plungeHitRadius}
           fill="rgba(0,0,0,0.01)"
-          strokeEnabled={false}
+          stroke="rgba(0,0,0,0)"
+          strokeWidth={MIN_PLUNGE_HIT_DIAMETER_PX}
+          strokeScaleEnabled={false}
         />
         <Circle
           x={plungeCenterX}
@@ -307,6 +304,7 @@ function SvgPathNode({
       listening={listening}
       hitStrokeWidth={Math.max((baseStrokeWidth ?? 2) * 2, 12)}
       hitFunc={strokeOnlyHitFunc}
+      strokeScaleEnabled={useCncStroke ? false : undefined}
       {...visualProps}
       onMouseDown={onPointerDown}
       onTouchStart={onPointerDown}
@@ -321,7 +319,7 @@ function SvgPathNode({
   )
 }
 
-export function ShapeRenderer({
+export const ShapeRenderer = memo(function ShapeRenderer({
   nodeId,
   registerNodeRef,
   parentDimmed = false,
@@ -344,7 +342,6 @@ export function ShapeRenderer({
   const eyedropperMode = useEditorStore((state) => state.eyedropperMode)
   const applyEyedropperPick = useEditorStore((state) => state.applyEyedropperPick)
   const toolDiameter = useEditorStore((state) => state.machiningSettings.toolDiameter)
-  const viewportScale = useEditorStore((state) => state.viewport.scale)
   const updateNodeTransform = useEditorStore((state) => state.updateNodeTransform)
   const { enterFocusMode, isSelected, selectMany, selectedIds, selectNode } = useSelection()
 
@@ -468,7 +465,6 @@ export function ShapeRenderer({
     hitboxOnly,
     parentCncMetadata,
     toolDiameter,
-    viewportScale,
     registerNodeRef,
     onPointerDown,
     onClick,
@@ -648,7 +644,7 @@ export function ShapeRenderer({
       : {}
     const isOpenPath = toolDiameter != null && isOpenPathNode(node)
     const useCncStroke = isOpenPath && showCncOverrides
-    const cncStrokeWidth = toolDiameter != null ? toolDiameter / viewportScale : toolDiameter
+    const cncStrokeWidth = toolDiameter
     const baseStrokeWidth = useCncStroke ? cncStrokeWidth! : node.strokeWidth
     const baseStroke = useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke
     const visualProps = Object.assign(
@@ -695,6 +691,7 @@ export function ShapeRenderer({
         listening={listening}
         hitStrokeWidth={hitWidth}
         hitFunc={lineStrokeOnlyHitFunc}
+        strokeScaleEnabled={useCncStroke ? false : undefined}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}
@@ -710,7 +707,7 @@ export function ShapeRenderer({
   }
 
   return <SvgPathNode {...commonProps} node={node} />
-}
+})
 
 export interface EngravePreviewStackProps {
   rootIds: string[]
@@ -725,7 +722,7 @@ export interface EngravePreviewStackProps {
   onNodeDragEnd?: (nodeId: string, konvaNode: Konva.Node) => void
 }
 
-export function EngravePreviewStack({
+export const EngravePreviewStack = memo(function EngravePreviewStack({
   rootIds,
   defaultDepth,
   toolDiameter,
@@ -805,4 +802,4 @@ export function EngravePreviewStack({
       ))}
     </>
   )
-}
+})

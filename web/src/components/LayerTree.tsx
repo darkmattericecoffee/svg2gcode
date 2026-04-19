@@ -6,6 +6,7 @@ import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
 import { depthToColor, isGeometricallyOpen, normalizeEngraveType } from '../lib/cncVisuals'
 import { useEditorStore } from '../store'
+import { EditorContextMenu } from './EditorContextMenu'
 import type { CanvasNode, GroupNode, LineNode } from '../types/editor'
 import type { NormalizedEngraveType } from '../lib/cncVisuals'
 
@@ -581,6 +582,12 @@ export function LayerTree() {
   const [dragAnchorId, setDragAnchorId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
+  const [contextMenu, setContextMenu] = useState({
+    isOpen: false,
+    x: 0,
+    y: 0,
+    nodeId: null as string | null,
+  })
 
   const filteredRootIds = rootIds.filter((id) => {
     const node = nodesById[id]
@@ -621,6 +628,22 @@ export function LayerTree() {
     setLastClickedId(id)
     setIsDragging(true)
     setDragAnchorId(id)
+  }
+
+  function handleRowContextMenu(id: string, e: React.MouseEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+
+    if (!selectedIds.includes(id)) {
+      selectOne(id)
+    }
+
+    setContextMenu({
+      isOpen: true,
+      x: e.clientX,
+      y: e.clientY,
+      nodeId: id,
+    })
   }
 
   function handleRowMouseEnter(id: string) {
@@ -674,6 +697,17 @@ export function LayerTree() {
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
+      <EditorContextMenu
+        isOpen={contextMenu.isOpen}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        showRename
+        onRename={() => {
+          const node = contextMenu.nodeId ? nodesById[contextMenu.nodeId] : null
+          if (node) handleStartRename(node)
+        }}
+        onOpenChange={(isOpen) => setContextMenu((current) => ({ ...current, isOpen }))}
+      />
       <div className="border-b border-border px-4 py-3">
         <SearchField value={query} onChange={setQuery} fullWidth>
           <SearchField.Group>
@@ -728,6 +762,7 @@ export function LayerTree() {
                       !node.visible && 'opacity-50',
                     )}
                     onMouseDown={(e) => handleRowMouseDown(id, e)}
+                    onContextMenu={(e) => handleRowContextMenu(id, e)}
                     onMouseEnter={() => handleRowMouseEnter(id)}
                     onMouseLeave={handleRowMouseLeave}
                   >
@@ -853,6 +888,7 @@ export function LayerTree() {
                           collapsedMap={collapsed}
                           onToggleCollapsed={handleToggleCollapsed}
                           onRowMouseDown={handleRowMouseDown}
+                          onRowContextMenu={handleRowContextMenu}
                           onRowMouseEnter={handleRowMouseEnter}
                           onRowMouseLeave={handleRowMouseLeave}
                           onToggleVisible={handleToggleVisible}
@@ -888,6 +924,7 @@ function TreeNode({
   collapsedMap,
   onToggleCollapsed,
   onRowMouseDown,
+  onRowContextMenu,
   onRowMouseEnter,
   onRowMouseLeave,
   onToggleVisible,
@@ -909,6 +946,7 @@ function TreeNode({
   collapsedMap: Record<string, boolean>
   onToggleCollapsed: (id: string) => void
   onRowMouseDown: (id: string, e: React.MouseEvent) => void
+  onRowContextMenu: (id: string, e: React.MouseEvent) => void
   onRowMouseEnter: (id: string) => void
   onRowMouseLeave: () => void
   onToggleVisible: (id: string) => void
@@ -950,6 +988,7 @@ function TreeNode({
         )}
         style={{ paddingLeft: `${12 + depth * 14}px` }}
         onMouseDown={(e) => onRowMouseDown(nodeId, e)}
+        onContextMenu={(e) => onRowContextMenu(nodeId, e)}
         onMouseEnter={() => onRowMouseEnter(nodeId)}
         onMouseLeave={onRowMouseLeave}
       >
@@ -1071,6 +1110,7 @@ function TreeNode({
               collapsedMap={collapsedMap}
               onToggleCollapsed={onToggleCollapsed}
               onRowMouseDown={onRowMouseDown}
+              onRowContextMenu={onRowContextMenu}
               onRowMouseEnter={onRowMouseEnter}
               onRowMouseLeave={onRowMouseLeave}
               onToggleVisible={onToggleVisible}

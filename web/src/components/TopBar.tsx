@@ -1,4 +1,5 @@
-import { Button, ButtonGroup, Dropdown, Label, ProgressBar } from '@heroui/react'
+import { useEffect, useState } from 'react'
+import { Button, ButtonGroup, Dropdown, Label, ProgressBar, ProgressCircle } from '@heroui/react'
 import type { JobProgress, GenerateJobResponse } from '@svg2gcode/bridge'
 import ArrowDownToSquareIcon from '@gravity-ui/icons/esm/ArrowDownToSquare.js'
 import SparklesIcon from '@gravity-ui/icons/esm/Sparkles.js'
@@ -20,6 +21,9 @@ interface TopBarProps {
   gcodeError?: string | null
   onDismissGcode?: () => void
 }
+
+const GCODE_TOAST_AUTO_DISMISS_MS = 5000
+const GCODE_TOAST_COUNTDOWN_TICK_MS = 100
 
 function progressLabel(progress: JobProgress | null | undefined): string {
   if (!progress) return 'Preparing GCode generation…'
@@ -73,8 +77,47 @@ export function TopBar({
   gcodeError,
   onDismissGcode,
 }: TopBarProps) {
+  const [dismissedGcodeResult, setDismissedGcodeResult] = useState<GenerateJobResponse | null>(null)
+  const [dismissCountdown, setDismissCountdown] = useState<{
+    result: GenerateJobResponse | null
+    remainingMs: number
+  }>({
+    result: null,
+    remainingMs: GCODE_TOAST_AUTO_DISMISS_MS,
+  })
   const percent = progressPercent(progress)
-  const isExpanded = isGenerating || !!gcodeResult || !!gcodeError
+  const showGcodeResultToast = !!gcodeResult && dismissedGcodeResult !== gcodeResult
+  const dismissRemainingMs =
+    dismissCountdown.result === gcodeResult ? dismissCountdown.remainingMs : GCODE_TOAST_AUTO_DISMISS_MS
+  const dismissCountdownValue = Math.max(
+    0,
+    Math.round((dismissRemainingMs / GCODE_TOAST_AUTO_DISMISS_MS) * 100),
+  )
+  const dismissCountdownSeconds = Math.max(1, Math.ceil(dismissRemainingMs / 1000))
+  const isExpanded = isGenerating || showGcodeResultToast || !!gcodeError
+
+  useEffect(() => {
+    if (!gcodeResult || isGenerating || dismissedGcodeResult === gcodeResult) return
+
+    const startedAt = Date.now()
+    const intervalId = window.setInterval(() => {
+      const remainingMs = Math.max(0, GCODE_TOAST_AUTO_DISMISS_MS - (Date.now() - startedAt))
+      setDismissCountdown({ result: gcodeResult, remainingMs })
+
+      if (remainingMs === 0) {
+        setDismissedGcodeResult(gcodeResult)
+        window.clearInterval(intervalId)
+      }
+    }, GCODE_TOAST_COUNTDOWN_TICK_MS)
+
+    return () => window.clearInterval(intervalId)
+  }, [dismissedGcodeResult, gcodeResult, isGenerating])
+
+  const dismissGcodeResultToast = () => {
+    if (!gcodeResult) return
+    setDismissCountdown({ result: gcodeResult, remainingMs: 0 })
+    setDismissedGcodeResult(gcodeResult)
+  }
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-4 z-30 flex justify-center px-4">
@@ -187,7 +230,7 @@ export function TopBar({
               </ProgressBar>
             )}
 
-            {!isGenerating && gcodeResult && (
+            {!isGenerating && showGcodeResultToast && gcodeResult && (
               <div className="flex items-start justify-between gap-4">
                 <div className="flex flex-col gap-1.5 min-w-0">
                   <p className="text-sm font-medium text-emerald-400">GCode generated</p>
@@ -205,14 +248,30 @@ export function TopBar({
                     </div>
                   )}
                 </div>
-                <Button
-                  size="sm"
-                  className="shrink-0 rounded-full text-[13px] text-white"
-                  variant="secondary"
-                  onPress={onDismissGcode}
-                >
-                  Dismiss
-                </Button>
+                <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <ProgressCircle
+                      aria-label="GCode generated toast auto-dismiss countdown"
+                      size="sm"
+                      color="success"
+                      value={dismissCountdownValue}
+                    >
+                      <ProgressCircle.Track className="h-7 w-7">
+                        <ProgressCircle.TrackCircle className="stroke-white/15" />
+                        <ProgressCircle.FillCircle className="stroke-emerald-400 transition-[stroke-dashoffset] duration-100 ease-linear" />
+                      </ProgressCircle.Track>
+                    </ProgressCircle>
+                    <Label className="text-xs text-white/55">{dismissCountdownSeconds}s</Label>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="rounded-full text-[13px] text-white"
+                    variant="secondary"
+                    onPress={dismissGcodeResultToast}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
               </div>
             )}
 

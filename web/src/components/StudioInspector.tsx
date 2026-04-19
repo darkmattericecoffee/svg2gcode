@@ -1,16 +1,21 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { Button, ButtonGroup, Tabs } from '@heroui/react'
-import { LayoutCells } from '@gravity-ui/icons'
+import { LayoutCells, Sparkles } from '@gravity-ui/icons'
+import { RotateCcw, RotateCw } from 'lucide-react'
 
 import { resizeGeneratorToBounds, supportsGeneratorResizeBack } from '../lib/generators'
+import { GENERATOR_LIBRARY_ITEMS } from '../lib/libraryItems'
 import { getNodeSize } from '../lib/nodeDimensions'
 import { generateCenterlineForNode } from '../lib/centerline'
 import { AppIcon, Icons } from '../lib/icons'
 import { useEditorStore } from '../store'
-import type { CanvasNode, CenterlineMetadata, GroupNode } from '../types/editor'
+import type { CanvasNode, CenterlineMetadata, GeneratorParams, GroupNode, RectNode } from '../types/editor'
 import type { MaterialPreset } from '../lib/materialPresets'
 import { MaterialTabContent, PreviewTabContent } from './MaterialTabContent'
 import { CutDepthEditor } from './CutDepthEditor'
+import { DowelHoleForm } from './library/DowelHoleForm'
+import { ScallopFrameForm } from './library/ScallopFrameForm'
+import { TenonForm } from './library/TenonForm'
 import {
   OPENROUTER_API_KEY_STORAGE,
   buildSvgForSmoothing,
@@ -18,7 +23,7 @@ import {
   streamAiSmooth,
 } from '../lib/aiSmooth'
 
-type InspectorTab = 'design' | 'material'
+type InspectorTab = 'design' | 'cut' | 'material'
 
 interface StudioInspectorProps {
   activeTab: InspectorTab
@@ -44,9 +49,13 @@ export function StudioInspector({ activeTab, onTabChange, materialPreset, onMate
           onSelectionChange={(key) => onTabChange(String(key) as InspectorTab)}
         >
           <Tabs.ListContainer>
-            <Tabs.List aria-label="Inspector tabs">
+            <Tabs.List aria-label="Inspector tabs" className="grid w-full grid-cols-3">
               <Tabs.Tab id="design">
                 Design
+                <Tabs.Indicator />
+              </Tabs.Tab>
+              <Tabs.Tab id="cut">
+                Cut
                 <Tabs.Indicator />
               </Tabs.Tab>
               <Tabs.Tab id="material">
@@ -56,17 +65,59 @@ export function StudioInspector({ activeTab, onTabChange, materialPreset, onMate
             </Tabs.List>
           </Tabs.ListContainer>
         </Tabs>
+        <SelectedArtHint />
       </div>
 
       {/* Content */}
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         {activeTab === 'design' ? (
           <DesignTabContent />
+        ) : activeTab === 'cut' ? (
+          <CutTabContent />
         ) : isPreview3d ? (
           <PreviewTabContent />
         ) : (
           <MaterialTabContent materialPreset={materialPreset} onMaterialChange={onMaterialChange} />
         )}
+      </div>
+    </div>
+  )
+}
+
+function SelectedArtHint() {
+  const selectedIds = useEditorStore((s) => s.selectedIds)
+  const selectedStage = useEditorStore((s) => s.selectedStage)
+  const nodesById = useEditorStore((s) => s.nodesById)
+
+  const selectedNodes = useMemo(
+    () => selectedIds.map((id) => nodesById[id]).filter((node): node is CanvasNode => Boolean(node)),
+    [selectedIds, nodesById],
+  )
+
+  if (selectedStage) {
+    return (
+      <div className="mt-2 flex min-w-0">
+        <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[#0d99ff]/45 bg-[rgba(13,153,255,0.14)] px-2 py-1 text-xs text-[#0d99ff]">
+          <span className="shrink-0">Selected</span>
+          <span className="min-w-0 truncate font-medium">Artboard</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (selectedNodes.length === 0) return null
+
+  const firstNode = selectedNodes[0]
+  const extraCount = selectedNodes.length - 1
+
+  return (
+    <div className="mt-2 flex min-w-0">
+      <div className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-[#0d99ff]/45 bg-[rgba(13,153,255,0.14)] px-2 py-1 text-xs text-[#0d99ff]">
+        <span className="shrink-0">Selected</span>
+        <span className="min-w-0 truncate font-medium">{firstNode.name || firstNode.id}</span>
+        <span className="shrink-0 opacity-75">
+          {extraCount > 0 ? `+ ${extraCount}` : firstNode.type}
+        </span>
       </div>
     </div>
   )
@@ -80,12 +131,14 @@ function DesignTabContent() {
   const updateNodeTransform = useEditorStore((s) => s.updateNodeTransform)
   const updateGeneratorParams = useEditorStore((s) => s.updateGeneratorParams)
   const alignSelectedNodes = useEditorStore((s) => s.alignSelectedNodes)
+  const rotateSelected = useEditorStore((s) => s.rotateSelected)
   const enableGrid = useEditorStore((s) => s.enableGrid)
   const disableGrid = useEditorStore((s) => s.disableGrid)
   const updateGridMetadata = useEditorStore((s) => s.updateGridMetadata)
   const enableCenterline = useEditorStore((s) => s.enableCenterline)
   const disableCenterline = useEditorStore((s) => s.disableCenterline)
   const updateCenterlineMetadata = useEditorStore((s) => s.updateCenterlineMetadata)
+  const [rotationDegrees, setRotationDegrees] = useState(90)
 
   const firstNode = selectedIds.length > 0 ? nodesById[selectedIds[0]] : null
   const canEditCenterlines = Boolean(
@@ -128,6 +181,16 @@ function DesignTabContent() {
     return group
   }, [firstNode, selectedIds.length])
 
+  const selectedGeneratorNode = useMemo(() => {
+    if (!firstNode || selectedIds.length !== 1 || firstNode.type !== 'group') return null
+    const group = firstNode as GroupNode
+    return group.generatorMetadata ? group : null
+  }, [firstNode, selectedIds.length])
+
+  const selectedRectNode = selectedIds.length === 1 && firstNode?.type === 'rect'
+    ? firstNode as RectNode
+    : null
+
   const centerlineResult = useMemo(() => {
     if (!firstNode?.centerlineMetadata?.enabled) return null
     return generateCenterlineForNode(firstNode.id, nodesById, { toolDiameter })
@@ -139,8 +202,8 @@ function DesignTabContent() {
       {firstNode && (
         <section className="space-y-3">
           <SectionHeading title="Align" />
-          <div className="space-y-2">
-            <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex min-w-0 flex-col gap-1">
               <span className="text-xs text-muted-foreground">Horizontal</span>
               <ButtonGroup orientation="horizontal" variant="tertiary">
                 <Button isIconOnly onPress={() => alignSelectedNodes('left')}>
@@ -156,7 +219,7 @@ function DesignTabContent() {
                 </Button>
               </ButtonGroup>
             </div>
-            <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1">
               <span className="text-xs text-muted-foreground">Vertical</span>
               <ButtonGroup orientation="horizontal" variant="tertiary">
                 <Button isIconOnly onPress={() => alignSelectedNodes('top')}>
@@ -176,123 +239,181 @@ function DesignTabContent() {
         </section>
       )}
 
-      {/* Selected art */}
-      <section className="space-y-4">
-        <SectionHeading title="Selected art" />
-        {firstNode ? (
+      {selectedGeneratorNode && (
+        <section className="space-y-4">
+          <SelectedGeneratorHeading node={selectedGeneratorNode} />
           <div className="rounded-md border border-border bg-content1 px-3 py-3">
-            <p className="text-sm font-medium text-foreground">{firstNode.name || firstNode.id}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {firstNode.type}
-              {selectedIds.length > 1 ? ` · ${selectedIds.length} selected` : ''}
-            </p>
+            <GeneratorSettingsPanel
+              node={selectedGeneratorNode}
+              onUpdate={(params) => updateGeneratorParams(selectedGeneratorNode.id, params)}
+            />
           </div>
-        ) : (
-          <div className="rounded-md border border-dashed border-border bg-content1 px-3 py-3 text-sm text-muted-foreground">
-            Select an art object to edit its placement and dimensions.
+        </section>
+      )}
+
+      {selectedRectNode && (
+        <section className="space-y-4">
+          <SectionHeading title="Shape" />
+          <div className="space-y-2">
+            <SubsectionHeading title="Corners" />
+            <NumberPill
+              label="Radius"
+              value={round2(selectedRectNode.cornerRadius ?? 0)}
+              unit="mm"
+              onChange={(value) => {
+                if (value === null) return
+                const maxRadius = Math.min(selectedRectNode.width, selectedRectNode.height) / 2
+                updateNodeTransform(selectedRectNode.id, {
+                  cornerRadius: Math.max(0, Math.min(value, maxRadius)),
+                } as Partial<CanvasNode>)
+              }}
+            />
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       {/* Dimensions & offset */}
       {firstNode && selectionBounds && selectionOffset && (
         <section className="space-y-4">
-          <SectionHeading title="Dimensions" />
-          <div className="flex flex-wrap gap-2">
-            <NumberPill
-              label="W"
-              value={round2(selectionBounds.width)}
-              unit="mm"
-              onChange={(v) => {
-                if (v === null || v <= 0 || selectionBounds.width <= 0) return
-                if (resizableGeneratorNode) {
-                  updateGeneratorParams(
-                    resizableGeneratorNode.id,
-                    resizeGeneratorToBounds(
-                      resizableGeneratorNode.generatorMetadata!.params,
-                      v,
-                      selectionBounds.height,
-                    ),
-                  )
-                  return
-                }
-                const ratio = v / selectionBounds.width
-                selectedIds.forEach((id) => {
-                  const node = nodesById[id]
-                  if (!node) return
-                  const ns = getNodeSize(node, nodesById)
-                  if (node.type === 'rect') {
-                    updateNodeTransform(id, { width: ns.width * ratio, height: ns.height * ratio } as Partial<CanvasNode>)
-                  } else {
-                    updateNodeTransform(id, { scaleX: node.scaleX * ratio, scaleY: node.scaleY * ratio } as Partial<CanvasNode>)
-                  }
-                })
-              }}
-            />
-            <NumberPill
-              label="H"
-              value={round2(selectionBounds.height)}
-              unit="mm"
-              onChange={(v) => {
-                if (v === null || v <= 0 || selectionBounds.height <= 0) return
-                if (resizableGeneratorNode) {
-                  updateGeneratorParams(
-                    resizableGeneratorNode.id,
-                    resizeGeneratorToBounds(
-                      resizableGeneratorNode.generatorMetadata!.params,
-                      selectionBounds.width,
-                      v,
-                    ),
-                  )
-                  return
-                }
-                const ratio = v / selectionBounds.height
-                selectedIds.forEach((id) => {
-                  const node = nodesById[id]
-                  if (!node) return
-                  const ns = getNodeSize(node, nodesById)
-                  if (node.type === 'rect') {
-                    updateNodeTransform(id, { width: ns.width * ratio, height: ns.height * ratio } as Partial<CanvasNode>)
-                  } else {
-                    updateNodeTransform(id, { scaleX: node.scaleX * ratio, scaleY: node.scaleY * ratio } as Partial<CanvasNode>)
-                  }
-                })
-              }}
-            />
-          </div>
-          <SectionHeading title="Offset" />
-          <div className="flex flex-wrap gap-2">
-            <NumberPill
-              label="X"
-              value={round2(selectionOffset.x)}
-              unit="mm"
-              onChange={(v) => {
-                if (v === null) return
-                const deltaX = v - selectionBounds.x
-                selectedIds.forEach((id) => {
-                  const node = nodesById[id]
-                  if (!node) return
-                  updateNodeTransform(id, { x: node.x + deltaX } as Partial<CanvasNode>)
-                })
-              }}
-            />
-            <NumberPill
-              label="Y"
-              value={round2(selectionOffset.y)}
-              unit="mm"
-              onChange={(v) => {
-                if (v === null) return
-                // selectionOffset.y = artboard.height - selectionBounds.y - selectionBounds.height
-                // new canvasTop = artboard.height - v - selectionBounds.height
-                const newCanvasTop = artboard.height - v - selectionBounds.height
-                const deltaY = newCanvasTop - selectionBounds.y
-                selectedIds.forEach((id) => {
-                  const node = nodesById[id]
-                  if (!node) return
-                  updateNodeTransform(id, { y: node.y + deltaY } as Partial<CanvasNode>)
-                })
-              }}
-            />
+          <SectionHeading title="Placement" />
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <SubsectionHeading title="Dimensions" />
+              <div className="flex flex-wrap gap-2">
+                <NumberPill
+                  label="W"
+                  value={round2(selectionBounds.width)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null || v <= 0 || selectionBounds.width <= 0) return
+                    if (resizableGeneratorNode) {
+                      updateGeneratorParams(
+                        resizableGeneratorNode.id,
+                        resizeGeneratorToBounds(
+                          resizableGeneratorNode.generatorMetadata!.params,
+                          v,
+                          selectionBounds.height,
+                        ),
+                      )
+                      return
+                    }
+                    const ratio = v / selectionBounds.width
+                    selectedIds.forEach((id) => {
+                      const node = nodesById[id]
+                      if (!node) return
+                      const ns = getNodeSize(node, nodesById)
+                      if (node.type === 'rect') {
+                        updateNodeTransform(id, { width: ns.width * ratio, height: ns.height * ratio } as Partial<CanvasNode>)
+                      } else {
+                        updateNodeTransform(id, { scaleX: node.scaleX * ratio, scaleY: node.scaleY * ratio } as Partial<CanvasNode>)
+                      }
+                    })
+                  }}
+                />
+                <NumberPill
+                  label="H"
+                  value={round2(selectionBounds.height)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null || v <= 0 || selectionBounds.height <= 0) return
+                    if (resizableGeneratorNode) {
+                      updateGeneratorParams(
+                        resizableGeneratorNode.id,
+                        resizeGeneratorToBounds(
+                          resizableGeneratorNode.generatorMetadata!.params,
+                          selectionBounds.width,
+                          v,
+                        ),
+                      )
+                      return
+                    }
+                    const ratio = v / selectionBounds.height
+                    selectedIds.forEach((id) => {
+                      const node = nodesById[id]
+                      if (!node) return
+                      const ns = getNodeSize(node, nodesById)
+                      if (node.type === 'rect') {
+                        updateNodeTransform(id, { width: ns.width * ratio, height: ns.height * ratio } as Partial<CanvasNode>)
+                      } else {
+                        updateNodeTransform(id, { scaleX: node.scaleX * ratio, scaleY: node.scaleY * ratio } as Partial<CanvasNode>)
+                      }
+                    })
+                  }}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <SubsectionHeading title="Offset" />
+              <div className="flex flex-wrap gap-2">
+                <NumberPill
+                  label="X"
+                  value={round2(selectionOffset.x)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null) return
+                    const deltaX = v - selectionBounds.x
+                    selectedIds.forEach((id) => {
+                      const node = nodesById[id]
+                      if (!node) return
+                      updateNodeTransform(id, { x: node.x + deltaX } as Partial<CanvasNode>)
+                    })
+                  }}
+                />
+                <NumberPill
+                  label="Y"
+                  value={round2(selectionOffset.y)}
+                  unit="mm"
+                  onChange={(v) => {
+                    if (v === null) return
+                    // selectionOffset.y = artboard.height - selectionBounds.y - selectionBounds.height
+                    // new canvasTop = artboard.height - v - selectionBounds.height
+                    const newCanvasTop = artboard.height - v - selectionBounds.height
+                    const deltaY = newCanvasTop - selectionBounds.y
+                    selectedIds.forEach((id) => {
+                      const node = nodesById[id]
+                      if (!node) return
+                      updateNodeTransform(id, { y: node.y + deltaY } as Partial<CanvasNode>)
+                    })
+                  }}
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <SubsectionHeading title="Rotation" />
+              <div className="flex flex-wrap items-center gap-2">
+                <ButtonGroup orientation="horizontal" variant="tertiary">
+                  <Button
+                    isIconOnly
+                    aria-label={`Rotate ${rotationDegrees} degrees counter-clockwise`}
+                    onPress={() => rotateSelected(-rotationDegrees)}
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    isIconOnly
+                    aria-label={`Rotate ${rotationDegrees} degrees clockwise`}
+                    onPress={() => rotateSelected(rotationDegrees)}
+                  >
+                    <ButtonGroup.Separator />
+                    <RotateCw className="h-4 w-4" />
+                  </Button>
+                </ButtonGroup>
+                <NumberPill
+                  label="By"
+                  value={round2(rotationDegrees)}
+                  unit="deg"
+                  onChange={(v) => {
+                    if (v === null || !Number.isFinite(v)) return
+                    setRotationDegrees(Math.abs(v))
+                  }}
+                />
+              </div>
+              {selectedIds.length === 1 && (
+                <p className="text-[10px] text-muted-foreground">
+                  Current rotation: {round2(firstNode.rotation ?? 0)} deg
+                </p>
+              )}
+            </div>
           </div>
         </section>
       )}
@@ -385,8 +506,80 @@ function DesignTabContent() {
           )}
         </section>
       )}
+    </div>
+  )
+}
 
-      {/* Cut depths */}
+function SelectedGeneratorHeading({ node }: { node: GroupNode }) {
+  const params = node.generatorMetadata?.params
+  const item = params
+    ? GENERATOR_LIBRARY_ITEMS.find((libraryItem) => libraryItem.kind === params.kind)
+    : null
+  const title = item?.label ?? params?.name ?? node.name
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      {item ? (
+        <img
+          alt=""
+          aria-hidden="true"
+          className="h-8 w-8 shrink-0 rounded-md object-cover"
+          src={item.imageSrc}
+          draggable={false}
+        />
+      ) : (
+        <Sparkles className="h-4 w-4 shrink-0 text-primary" />
+      )}
+      <h3 className="truncate text-sm font-semibold text-foreground">{title}</h3>
+    </div>
+  )
+}
+
+function GeneratorSettingsPanel({
+  node,
+  onUpdate,
+}: {
+  node: GroupNode
+  onUpdate: (params: GeneratorParams) => void
+}) {
+  const params = node.generatorMetadata?.params
+  if (!params) return null
+
+  if (params.kind === 'tenon') {
+    return (
+      <TenonForm
+        initialParams={params}
+        mode="edit"
+        nodeId={node.id}
+        onUpdate={onUpdate}
+      />
+    )
+  }
+
+  if (params.kind === 'dowelHole') {
+    return (
+      <DowelHoleForm
+        initialParams={params}
+        mode="edit"
+        nodeId={node.id}
+        onUpdate={onUpdate}
+      />
+    )
+  }
+
+  return (
+    <ScallopFrameForm
+      initialParams={params}
+      mode="edit"
+      nodeId={node.id}
+      onUpdate={onUpdate}
+    />
+  )
+}
+
+function CutTabContent() {
+  return (
+    <div className="space-y-5">
       <CutDepthEditor />
     </div>
   )
@@ -761,7 +954,7 @@ function SectionHeading({
   title,
   rightContent,
 }: {
-  title: string
+  title: React.ReactNode
   rightContent?: React.ReactNode
 }) {
   return (
@@ -770,6 +963,10 @@ function SectionHeading({
       {rightContent ? <div>{rightContent}</div> : null}
     </div>
   )
+}
+
+function SubsectionHeading({ title }: { title: string }) {
+  return <h4 className="text-xs font-medium text-muted-foreground">{title}</h4>
 }
 
 function round2(v: number): number {

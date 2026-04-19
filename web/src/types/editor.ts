@@ -3,6 +3,7 @@ export type EyedropperMode = 'off' | 'full' | 'depth-only'
 export type CanvasFillRule = 'nonzero' | 'evenodd'
 
 export type ShapeType = 'group' | 'rect' | 'circle' | 'line' | 'path'
+export type BasicShapeKind = 'rectangle' | 'circle' | 'triangle'
 
 export interface ArtboardState {
   width: number

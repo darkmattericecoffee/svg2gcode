@@ -26,7 +26,7 @@ import { insertTabs } from './lib/gcodeTabInsertion'
 import type { ViewMode } from './types/preview'
 import type { CanvasNode } from './types/editor'
 
-type InspectorTab = 'design' | 'material'
+type InspectorTab = 'design' | 'cut' | 'material'
 
 function App() {
   const artboard = useEditorStore((state) => state.artboard)
@@ -222,15 +222,14 @@ function App() {
 
       if (autoPlace) {
         stagePendingImport(pendingScene)
-        placePendingImport(
-          getAutoImportPlacement({
-            artboard,
-            nodesById,
-            rootIds,
-            width: pendingScene.width,
-            height: pendingScene.height,
-          }),
-        )
+        const placement = getAutoImportPlacement({
+          artboard,
+          nodesById,
+          rootIds,
+          width: pendingScene.width,
+          height: pendingScene.height,
+        })
+        placePendingImport(placement, { focusViewport: true })
       } else {
         stagePendingImport(pendingScene)
       }

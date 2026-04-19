@@ -1,15 +1,17 @@
 import { create } from 'zustand'
 
-import { getSelectableIdsInScope, getSubtreeIds, isGroupNode } from './lib/editorTree'
+import { getAncestorIds, getSelectableIdsInScope, getSubtreeIds, isGroupNode } from './lib/editorTree'
 import { normalizeGeneratorParams, runGenerator, supportsGeneratorResizeBack } from './lib/generators'
 import { resolveParamsAgainstTool } from './lib/generators'
 import { getNodeSize } from './lib/nodeDimensions'
 import { importSvgToScene } from './lib/svgImport'
 import type {
   ArtboardState,
+  BasicShapeKind,
   CanvasNode,
   CenterlineMetadata,
   CncMetadata,
+  EngraveType,
   EyedropperMode,
   GeneratorParams,
   GridMetadata,
@@ -40,6 +42,13 @@ type HistorySnapshot = {
 
 const MAX_HISTORY = 50
 
+type ImportFocusRequest = {
+  requestId: number
+  rect: MarqueeRect
+}
+
+let nextImportFocusRequestId = 1
+
 export interface EditorStore {
   nodesById: Record<string, CanvasNode>
   rootIds: string[]
@@ -57,6 +66,7 @@ export interface EditorStore {
     marquee: MarqueeRect | null
     isTransforming: boolean
     pendingImport: PendingSvgImport | null
+    importFocusRequest: ImportFocusRequest | null
     importStatus: ImportStatus | null
   }
   nodeVersion: number
@@ -85,7 +95,14 @@ export interface EditorStore {
   redo: () => void
   deleteSelected: () => void
   copySelected: () => void
+  cutSelected: () => void
   pasteClipboard: () => void
+  groupSelected: () => void
+  ungroupSelected: () => void
+  orderSelected: (direction: 'forward' | 'backward' | 'front' | 'back') => void
+  rotateSelected: (degrees: number) => void
+  renameNode: (nodeId: string, nextName: string) => void
+  setSelectedEngraveType: (engraveType: Extract<EngraveType, 'contour' | 'pocket'>) => void
   duplicateSelected: (offsetX?: number, offsetY?: number) => void
   duplicateInPlace: () => void
   selectAll: () => void
@@ -97,13 +114,18 @@ export interface EditorStore {
   setIsTransforming: (isTransforming: boolean) => void
   stagePendingImport: (pendingImport: PendingSvgImport) => void
   clearPendingImport: () => void
-  placePendingImport: (position: { x: number; y: number }) => void
+  placePendingImport: (
+    position: { x: number; y: number },
+    options?: { focusViewport?: boolean },
+  ) => void
+  clearImportFocusRequest: (requestId: number) => void
   setImportStatus: (status: ImportStatus | null) => void
 
   // Library tab
   leftPanelTab: 'layers' | 'library'
   setLeftPanelTab: (tab: 'layers' | 'library') => void
-  placeGenerator: (params: GeneratorParams) => void
+  placeGenerator: (params: GeneratorParams, position?: { x: number; y: number }) => void
+  placeShape: (kind: BasicShapeKind, position?: { x: number; y: number }) => void
   updateGeneratorParams: (
     nodeId: string,
     params: GeneratorParams,
@@ -170,6 +192,103 @@ function buildPlungeCircleRenderHint(
     diameter,
     centerX: baseWidth / 2,
     centerY: baseHeight / 2,
+  }
+}
+
+function circlePathData(diameter: number): string {
+  const radius = diameter / 2
+  return [
+    `M ${diameter} ${radius}`,
+    `A ${radius} ${radius} 0 1 0 0 ${radius}`,
+    `A ${radius} ${radius} 0 1 0 ${diameter} ${radius}`,
+    'Z',
+  ].join(' ')
+}
+
+function getBasicShapeSize(kind: BasicShapeKind): { width: number; height: number } {
+  if (kind === 'circle') {
+    return { width: 64, height: 64 }
+  }
+
+  if (kind === 'triangle') {
+    return { width: 88, height: 72 }
+  }
+
+  return { width: 96, height: 64 }
+}
+
+function getCenteredPlacement(
+  center: { x: number; y: number },
+  width: number,
+  height: number,
+  artboard: ArtboardState,
+): { x: number; y: number } {
+  return {
+    x: clamp(center.x - width / 2, 0, Math.max(0, artboard.width - width)),
+    y: clamp(center.y - height / 2, 0, Math.max(0, artboard.height - height)),
+  }
+}
+
+function createBasicShapeNode(
+  kind: BasicShapeKind,
+  position: { x: number; y: number },
+  defaultDepthMm: number,
+): CanvasNode {
+  const id = generateId()
+  const { width, height } = getBasicShapeSize(kind)
+  const base = {
+    id,
+    name: kind === 'rectangle' ? 'Rectangle' : kind === 'circle' ? 'Circle' : 'Triangle',
+    x: position.x,
+    y: position.y,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    draggable: true,
+    locked: false,
+    visible: true,
+    opacity: 1,
+    parentId: null,
+    cncMetadata: {
+      cutDepth: defaultDepthMm,
+      engraveType: 'contour' as const,
+    },
+  }
+
+  if (kind === 'rectangle') {
+    return {
+      ...base,
+      type: 'rect',
+      width,
+      height,
+      fill: '',
+      stroke: '#121212',
+      strokeWidth: 1,
+      cornerRadius: 0,
+    }
+  }
+
+  if (kind === 'circle') {
+    return {
+      ...base,
+      type: 'path',
+      data: circlePathData(width),
+      fill: '',
+      stroke: '#121212',
+      strokeWidth: 1,
+      fillRule: 'nonzero',
+    }
+  }
+
+  return {
+    ...base,
+    type: 'line',
+    points: [0, height, width / 2, 0, width, height],
+    closed: true,
+    fill: '',
+    stroke: '#121212',
+    strokeWidth: 1,
+    lineJoin: 'miter',
   }
 }
 
@@ -294,6 +413,117 @@ function cloneSubtree(
   return { newRootId, clonedNodes }
 }
 
+type OrderingDirection = 'forward' | 'backward' | 'front' | 'back'
+
+interface Matrix {
+  a: number
+  b: number
+  c: number
+  d: number
+  e: number
+  f: number
+}
+
+function reorderSiblings(
+  ids: string[],
+  selected: Set<string>,
+  direction: OrderingDirection,
+): { ids: string[]; changed: boolean } {
+  if (!ids.some((id) => selected.has(id))) {
+    return { ids, changed: false }
+  }
+
+  if (direction === 'front') {
+    const selectedIds = ids.filter((id) => selected.has(id))
+    if (selectedIds.length === 0 || ids.slice(-selectedIds.length).every((id, index) => id === selectedIds[index])) {
+      return { ids, changed: false }
+    }
+    return {
+      ids: [...ids.filter((id) => !selected.has(id)), ...selectedIds],
+      changed: true,
+    }
+  }
+
+  if (direction === 'back') {
+    const selectedIds = ids.filter((id) => selected.has(id))
+    if (selectedIds.length === 0 || ids.slice(0, selectedIds.length).every((id, index) => id === selectedIds[index])) {
+      return { ids, changed: false }
+    }
+    return {
+      ids: [...selectedIds, ...ids.filter((id) => !selected.has(id))],
+      changed: true,
+    }
+  }
+
+  const nextIds = [...ids]
+  let changed = false
+
+  if (direction === 'forward') {
+    for (let index = nextIds.length - 2; index >= 0; index -= 1) {
+      if (selected.has(nextIds[index]) && !selected.has(nextIds[index + 1])) {
+        ;[nextIds[index], nextIds[index + 1]] = [nextIds[index + 1], nextIds[index]]
+        changed = true
+      }
+    }
+  } else {
+    for (let index = 1; index < nextIds.length; index += 1) {
+      if (selected.has(nextIds[index]) && !selected.has(nextIds[index - 1])) {
+        ;[nextIds[index - 1], nextIds[index]] = [nextIds[index], nextIds[index - 1]]
+        changed = true
+      }
+    }
+  }
+
+  return { ids: changed ? nextIds : ids, changed }
+}
+
+function normalizeRotation(degrees: number): number {
+  const normalized = degrees % 360
+  return Object.is(normalized, -0) ? 0 : normalized
+}
+
+function nodeMatrix(node: CanvasNode): Matrix {
+  const radians = (node.rotation ?? 0) * Math.PI / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const scaleX = node.scaleX ?? 1
+  const scaleY = node.scaleY ?? 1
+
+  return {
+    a: cos * scaleX,
+    b: sin * scaleX,
+    c: -sin * scaleY,
+    d: cos * scaleY,
+    e: node.x,
+    f: node.y,
+  }
+}
+
+function multiplyMatrices(left: Matrix, right: Matrix): Matrix {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d,
+    e: left.a * right.e + left.c * right.f + left.e,
+    f: left.b * right.e + left.d * right.f + left.f,
+  }
+}
+
+function transformPatchFromMatrix(matrix: Matrix): Pick<CanvasNode, 'x' | 'y' | 'rotation' | 'scaleX' | 'scaleY'> {
+  const scaleX = Math.hypot(matrix.a, matrix.b) || 1
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c
+  const scaleY = determinant / scaleX
+
+  return {
+    x: matrix.e,
+    y: matrix.f,
+    rotation: normalizeRotation(Math.atan2(matrix.b, matrix.a) * 180 / Math.PI),
+    scaleX,
+    scaleY,
+  }
+}
+
 const initialNodes: Record<string, CanvasNode> = {}
 
 const initialRootIds: string[] = []
@@ -385,6 +615,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     marquee: null,
     isTransforming: false,
     pendingImport: null,
+    importFocusRequest: null,
     importStatus: null,
   },
   nodeVersion: 0,
@@ -624,6 +855,12 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
 
     set({ clipboard: { rootIds: clipboardRootIds, nodesById: clipboardNodesById } })
   },
+  cutSelected: () => {
+    const { selectedIds } = get()
+    if (selectedIds.length === 0) return
+    get().copySelected()
+    get().deleteSelected()
+  },
   pasteClipboard: () => {
     const { nodesById, rootIds, clipboard } = get()
     if (!clipboard) return
@@ -644,6 +881,270 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       rootIds: [...rootIds, ...newRootIds],
       selectedIds: newRootIds,
       selectedStage: false,
+    })
+  },
+  groupSelected: () => {
+    const { nodesById, rootIds, selectedIds } = get()
+    const selectedNodes = selectedIds
+      .map((id) => nodesById[id])
+      .filter((node): node is CanvasNode => Boolean(node))
+
+    if (selectedNodes.length < 2) return
+
+    const parentId = selectedNodes[0].parentId
+    if (!selectedNodes.every((node) => node.parentId === parentId)) return
+
+    const siblings = parentId ? (nodesById[parentId] as GroupNode | undefined)?.childIds : rootIds
+    if (!siblings) return
+
+    const selected = new Set(selectedIds)
+    const groupedChildIds = siblings.filter((id) => selected.has(id))
+    if (groupedChildIds.length < 2) return
+
+    const groupX = Math.min(...groupedChildIds.map((id) => nodesById[id]?.x ?? 0))
+    const groupY = Math.min(...groupedChildIds.map((id) => nodesById[id]?.y ?? 0))
+    const groupId = generateId()
+    const groupNode: GroupNode = {
+      id: groupId,
+      type: 'group',
+      name: 'Group',
+      x: groupX,
+      y: groupY,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      draggable: true,
+      locked: false,
+      visible: true,
+      opacity: 1,
+      parentId,
+      childIds: groupedChildIds,
+    }
+
+    const nextNodesById: Record<string, CanvasNode> = {
+      ...nodesById,
+      [groupId]: groupNode,
+    }
+
+    groupedChildIds.forEach((id) => {
+      const child = nextNodesById[id]
+      if (!child) return
+      nextNodesById[id] = {
+        ...child,
+        x: child.x - groupX,
+        y: child.y - groupY,
+        parentId: groupId,
+      } as CanvasNode
+    })
+
+    const nextSiblings = siblings.flatMap((id) => {
+      if (id === groupedChildIds[0]) return [groupId]
+      return selected.has(id) ? [] : [id]
+    })
+
+    if (parentId) {
+      const parent = nextNodesById[parentId]
+      if (!parent || parent.type !== 'group') return
+      nextNodesById[parentId] = {
+        ...parent,
+        childIds: nextSiblings,
+      }
+      get().pushHistory()
+      set({
+        nodesById: nextNodesById,
+        selectedIds: [groupId],
+        selectedStage: false,
+      })
+      return
+    }
+
+    get().pushHistory()
+    set({
+      nodesById: nextNodesById,
+      rootIds: nextSiblings,
+      selectedIds: [groupId],
+      selectedStage: false,
+    })
+  },
+  ungroupSelected: () => {
+    const { nodesById, rootIds, selectedIds, focusGroupId } = get()
+    const selected = new Set(selectedIds)
+    const selectedGroupIds = selectedIds.filter((id) => {
+      const node = nodesById[id]
+      return (
+        node?.type === 'group' &&
+        !getAncestorIds(id, nodesById).some((ancestorId) => selected.has(ancestorId))
+      )
+    })
+
+    if (selectedGroupIds.length === 0) return
+
+    const groupIds = new Set(selectedGroupIds)
+    const nextNodesById: Record<string, CanvasNode> = { ...nodesById }
+    let nextRootIds = rootIds
+    const nextSelectedIds: string[] = []
+
+    const expandSiblings = (siblings: string[]): { ids: string[]; changed: boolean } => {
+      let changed = false
+      const ids = siblings.flatMap((id) => {
+        const group = nodesById[id]
+        if (!groupIds.has(id) || group?.type !== 'group') {
+          return [id]
+        }
+
+        changed = true
+        nextSelectedIds.push(...(group as GroupNode).childIds)
+        return (group as GroupNode).childIds
+      })
+
+      return { ids, changed }
+    }
+
+    const rootResult = expandSiblings(rootIds)
+    if (rootResult.changed) {
+      nextRootIds = rootResult.ids
+    }
+
+    for (const node of Object.values(nodesById)) {
+      if (node.type !== 'group' || groupIds.has(node.id)) continue
+      const result = expandSiblings((node as GroupNode).childIds)
+      if (!result.changed) continue
+      nextNodesById[node.id] = {
+        ...(nextNodesById[node.id] as GroupNode),
+        childIds: result.ids,
+      }
+    }
+
+    for (const groupId of selectedGroupIds) {
+      const group = nodesById[groupId]
+      if (!group || group.type !== 'group') continue
+
+      const groupMatrix = nodeMatrix(group)
+      ;(group as GroupNode).childIds.forEach((childId) => {
+        const child = nodesById[childId]
+        if (!child) return
+        nextNodesById[childId] = {
+          ...child,
+          ...transformPatchFromMatrix(multiplyMatrices(groupMatrix, nodeMatrix(child))),
+          parentId: group.parentId,
+          visible: group.visible && child.visible,
+          locked: group.locked || child.locked,
+          opacity: group.opacity * child.opacity,
+          cncMetadata: group.cncMetadata
+            ? { ...group.cncMetadata, ...child.cncMetadata }
+            : child.cncMetadata,
+        } as CanvasNode
+      })
+
+      delete nextNodesById[groupId]
+    }
+
+    get().pushHistory()
+    set({
+      nodesById: nextNodesById,
+      rootIds: nextRootIds,
+      selectedIds: nextSelectedIds,
+      selectedStage: false,
+      focusGroupId: focusGroupId && groupIds.has(focusGroupId) ? null : focusGroupId,
+    })
+  },
+  orderSelected: (direction) => {
+    const { nodesById, rootIds, selectedIds } = get()
+    if (selectedIds.length === 0) return
+
+    const selected = new Set(selectedIds)
+    let nextRootIds = rootIds
+    let nextNodesById = nodesById
+    let changed = false
+
+    const rootResult = reorderSiblings(rootIds, selected, direction)
+    if (rootResult.changed) {
+      nextRootIds = rootResult.ids
+      changed = true
+    }
+
+    for (const node of Object.values(nodesById)) {
+      if (node.type !== 'group') continue
+      const result = reorderSiblings((node as GroupNode).childIds, selected, direction)
+      if (!result.changed) continue
+
+      if (nextNodesById === nodesById) {
+        nextNodesById = { ...nodesById }
+      }
+
+      nextNodesById[node.id] = {
+        ...(nextNodesById[node.id] as GroupNode),
+        childIds: result.ids,
+      }
+      changed = true
+    }
+
+    if (!changed) return
+
+    get().pushHistory()
+    set({
+      nodesById: nextNodesById,
+      rootIds: nextRootIds,
+    })
+  },
+  rotateSelected: (degrees) => {
+    const { nodesById, selectedIds } = get()
+    const editableIds = selectedIds.filter((id) => nodesById[id])
+    if (editableIds.length === 0) return
+
+    get().pushHistory()
+    set((state) => {
+      const nextNodesById = { ...state.nodesById }
+      editableIds.forEach((id) => {
+        const node = nextNodesById[id]
+        if (!node) return
+        nextNodesById[id] = {
+          ...node,
+          rotation: normalizeRotation((node.rotation ?? 0) + degrees),
+        } as CanvasNode
+      })
+      return { nodesById: nextNodesById }
+    })
+  },
+  renameNode: (nodeId, nextName) => {
+    const normalizedName = nextName.trim()
+    const node = get().nodesById[nodeId]
+    if (!node || !normalizedName || normalizedName === node.name) return
+
+    get().pushHistory()
+    set((state) => ({
+      nodesById: {
+        ...state.nodesById,
+        [nodeId]: {
+          ...node,
+          name: normalizedName,
+        } as CanvasNode,
+      },
+    }))
+  },
+  setSelectedEngraveType: (engraveType) => {
+    const { nodesById, selectedIds } = get()
+    const editableIds = selectedIds.filter((id) => nodesById[id])
+    if (editableIds.length === 0) return
+
+    const changed = editableIds.some((id) => nodesById[id]?.cncMetadata?.engraveType !== engraveType)
+    if (!changed) return
+
+    get().pushHistory()
+    set((state) => {
+      const nextNodesById = { ...state.nodesById }
+      editableIds.forEach((id) => {
+        const node = nextNodesById[id]
+        if (!node) return
+        nextNodesById[id] = {
+          ...node,
+          cncMetadata: {
+            ...node.cncMetadata,
+            engraveType,
+          },
+        } as CanvasNode
+      })
+      return { nodesById: nextNodesById }
     })
   },
   duplicateSelected: (offsetX = 20, offsetY = 20) => {
@@ -802,7 +1303,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       },
     }))
   },
-  placePendingImport: (position) => {
+  placePendingImport: (position, options) => {
     const { nodesById, rootIds, ui } = get()
     const pendingImport = ui.pendingImport
 
@@ -844,10 +1345,32 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ui: {
         ...state.ui,
         pendingImport: null,
+        importFocusRequest: options?.focusViewport
+          ? {
+              requestId: nextImportFocusRequestId++,
+              rect: {
+                x: position.x,
+                y: position.y,
+                width: pendingImport.width,
+                height: pendingImport.height,
+              },
+            }
+          : state.ui.importFocusRequest,
         importStatus: {
           tone: 'success',
           message: `Imported "${pendingImport.name}" onto the artboard.`,
         },
+      },
+    }))
+  },
+  clearImportFocusRequest: (requestId) => {
+    set((state) => ({
+      ui: {
+        ...state.ui,
+        importFocusRequest:
+          state.ui.importFocusRequest?.requestId === requestId
+            ? null
+            : state.ui.importFocusRequest,
       },
     }))
   },
@@ -863,7 +1386,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   // Library tab
   setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
 
-  placeGenerator: (params) => {
+  placeGenerator: (params, position) => {
     const { artboard, machiningSettings, nodesById, rootIds } = get()
     const resolved = normalizeGeneratorParams(resolveParamsAgainstTool(params, machiningSettings))
     const svgText = runGenerator(resolved)
@@ -894,14 +1417,52 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }
     get().stagePendingImport(pending)
     get().placePendingImport(
-      getAutoImportPlacement({
-        artboard,
-        nodesById,
-        rootIds,
-        width: pending.width,
-        height: pending.height,
-      }),
+      position
+        ? getCenteredPlacement(position, pending.width, pending.height, artboard)
+        : getAutoImportPlacement({
+            artboard,
+            nodesById,
+            rootIds,
+            width: pending.width,
+            height: pending.height,
+          }),
     )
+  },
+
+  placeShape: (kind, position) => {
+    const { artboard, machiningSettings, nodesById, rootIds } = get()
+    const { width, height } = getBasicShapeSize(kind)
+    const placement = position
+      ? getCenteredPlacement(position, width, height, artboard)
+      : getAutoImportPlacement({
+          artboard,
+          nodesById,
+          rootIds,
+          width,
+          height,
+        })
+    const node = createBasicShapeNode(kind, placement, machiningSettings.defaultDepthMm)
+
+    get().pushHistory()
+
+    set((state) => ({
+      nodesById: {
+        ...state.nodesById,
+        [node.id]: node,
+      },
+      rootIds: [...state.rootIds, node.id],
+      selectedIds: [node.id],
+      selectedStage: false,
+      focusGroupId: null,
+      ui: {
+        ...state.ui,
+        pendingImport: null,
+        importStatus: {
+          tone: 'success',
+          message: `Added "${node.name}" to the artboard.`,
+        },
+      },
+    }))
   },
 
   updateGeneratorParams: (nodeId, params, options) => {

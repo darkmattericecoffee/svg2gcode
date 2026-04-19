@@ -22,7 +22,9 @@ import { getNodeSize } from './lib/nodeDimensions'
 import { getBoundsForNodes, getGuides, getLineGuideStops } from './lib/objectSnapping'
 import { getNodeTransformPatch } from './lib/transformUtils'
 import { generateCenterlineForNode } from './lib/centerline'
+import { LIBRARY_DRAG_MIME, parseLibraryDragPayload } from './lib/libraryItems'
 import { EngravePreviewStack, ShapeRenderer } from './ShapeRenderer'
+import { EditorContextMenu } from './components/EditorContextMenu'
 import { useCanvasState } from './hooks/useCanvasState'
 import { useSelection } from './hooks/useSelection'
 import { useEditorStore } from './store'
@@ -57,6 +59,7 @@ const TRACKPAD_PAN_DELTA_THRESHOLD = 50
 const EYEDROPPER_CURSOR_HOTSPOT_X = 3
 const EYEDROPPER_CURSOR_HOTSPOT_Y = 16
 const EYEDROPPER_PICK_FLASH_MS = 140
+const IMPORT_FOCUS_PADDING_PX = 96
 
 type NodeLiveTransform = { x: number; y: number; rotation: number; scaleX: number; scaleY: number }
 
@@ -312,11 +315,13 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   )
   const viewport = useEditorStore((state) => state.viewport)
   const pendingImport = useEditorStore((state) => state.ui.pendingImport)
+  const importFocusRequest = useEditorStore((state) => state.ui.importFocusRequest)
   const eyedropperMode = useEditorStore((state) => state.eyedropperMode)
   const eyedropperSourceNodeId = useEditorStore((state) => state.eyedropperSourceNodeId)
   const toolDiameter = useEditorStore((state) => state.machiningSettings.toolDiameter)
   const defaultDepthMm = useEditorStore((state) => state.machiningSettings.defaultDepthMm)
   const setViewport = useEditorStore((state) => state.setViewport)
+  const clearImportFocusRequest = useEditorStore((state) => state.clearImportFocusRequest)
   const resetViewport = useEditorStore((state) => state.resetViewport)
   const setMarquee = useEditorStore((state) => state.setMarquee)
   const setEyedropperMode = useEditorStore((state) => state.setEyedropperMode)
@@ -334,6 +339,8 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const canUndo = useEditorStore((state) => state.history.past.length > 0)
   const canRedo = useEditorStore((state) => state.history.future.length > 0)
   const placePendingImport = useEditorStore((state) => state.placePendingImport)
+  const placeGenerator = useEditorStore((state) => state.placeGenerator)
+  const placeShape = useEditorStore((state) => state.placeShape)
   const setInteractionMode = useEditorStore((state) => state.setInteractionMode)
   const aiSmoothStreamingIds = useEditorStore((state) => state.aiSmoothStreamingIds)
   const { getMarqueeCandidateIds, selectMany, selectStage, selectableIds } = useSelection()
@@ -371,6 +378,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [eyedropperCursorFlashFilled, setEyedropperCursorFlashFilled] = useState(false)
   const [transformTick, setTransformTick] = useState(0)
+  const [contextMenu, setContextMenu] = useState({ isOpen: false, x: 0, y: 0 })
   const zoomInputRef = useRef<HTMLInputElement | null>(null)
   const presetDef = MATERIAL_PRESETS.find((p) => p.id === materialPreset) ?? MATERIAL_PRESETS[0]
   const woodTexture = useImageAsset(presetDef.textureSrc)
@@ -384,16 +392,34 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const interactionBlocked = isSpacePressed || isPanning || panToolActive
   const zoomPercent = Math.round(viewport.scale * 100)
 
-  const registerNodeRef = (nodeId: string, node: Konva.Node | null) => {
+  const registerNodeRef = useCallback((nodeId: string, node: Konva.Node | null) => {
     if (node) {
       nodeRefs.current.set(nodeId, node)
       return
     }
 
     nodeRefs.current.delete(nodeId)
+  }, [])
+  const noopRegisterNodeRef = useCallback(() => {}, [])
+
+  const getContextMenuTargetId = (target: Konva.Node): string | null => {
+    if (isEmptyCanvasTarget(target)) {
+      return null
+    }
+
+    let current: Konva.Node | null = target
+    while (current) {
+      const id = current.id()
+      if (id && selectableIds.includes(id)) {
+        return id
+      }
+      current = current.parent
+    }
+
+    return null
   }
 
-  const clearSnapGuides = () => {
+  const clearSnapGuides = useCallback(() => {
     const guideLayer = guideLayerRef.current
     if (!guideLayer) {
       return
@@ -401,7 +427,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     guideLayer.find(`.${GUIDELINE_NAME}`).forEach((line) => line.destroy())
     guideLayer.batchDraw()
-  }
+  }, [])
 
   const getMarqueeHitHighlights = useCallback(
     (currentMarquee: MarqueeRect): MarqueeHighlight[] =>
@@ -482,52 +508,55 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     }, 0)
   }
 
-  const drawSnapGuides = (
-    guides: ReturnType<typeof getGuides>,
-    scopeRect: MarqueeRect,
-  ) => {
-    const guideLayer = guideLayerRef.current
-    if (!guideLayer) {
-      return
-    }
+  const drawSnapGuides = useCallback(
+    (
+      guides: ReturnType<typeof getGuides>,
+      scopeRect: MarqueeRect,
+    ) => {
+      const guideLayer = guideLayerRef.current
+      if (!guideLayer) {
+        return
+      }
 
-    clearSnapGuides()
+      clearSnapGuides()
 
-    guides.forEach((guide) => {
-      const line =
-        guide.orientation === 'H'
-          ? new Konva.Line({
-              points: [
-                scopeRect.x,
-                guide.lineGuide,
-                scopeRect.x + scopeRect.width,
-                guide.lineGuide,
-              ],
-              stroke: 'rgb(0, 161, 255)',
-              strokeWidth: 1,
-              name: GUIDELINE_NAME,
-              dash: [4, 6],
-              listening: false,
-            })
-          : new Konva.Line({
-              points: [
-                guide.lineGuide,
-                scopeRect.y,
-                guide.lineGuide,
-                scopeRect.y + scopeRect.height,
-              ],
-              stroke: 'rgb(0, 161, 255)',
-              strokeWidth: 1,
-              name: GUIDELINE_NAME,
-              dash: [4, 6],
-              listening: false,
-            })
+      guides.forEach((guide) => {
+        const line =
+          guide.orientation === 'H'
+            ? new Konva.Line({
+                points: [
+                  scopeRect.x,
+                  guide.lineGuide,
+                  scopeRect.x + scopeRect.width,
+                  guide.lineGuide,
+                ],
+                stroke: 'rgb(0, 161, 255)',
+                strokeWidth: 1,
+                name: GUIDELINE_NAME,
+                dash: [4, 6],
+                listening: false,
+              })
+            : new Konva.Line({
+                points: [
+                  guide.lineGuide,
+                  scopeRect.y,
+                  guide.lineGuide,
+                  scopeRect.y + scopeRect.height,
+                ],
+                stroke: 'rgb(0, 161, 255)',
+                strokeWidth: 1,
+                name: GUIDELINE_NAME,
+                dash: [4, 6],
+                listening: false,
+              })
 
-      guideLayer.add(line)
-    })
+        guideLayer.add(line)
+      })
 
-    guideLayer.batchDraw()
-  }
+      guideLayer.batchDraw()
+    },
+    [clearSnapGuides],
+  )
 
   const screenToScene = (point: Point): Point => ({
     x: (point.x - viewport.x) / viewport.scale,
@@ -547,6 +576,39 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     setViewport(nextViewport)
   }
+
+  useEffect(() => {
+    if (!importFocusRequest) {
+      return
+    }
+
+    const currentViewport = useEditorStore.getState().viewport
+    const sceneRect = {
+      x: artboardRect.x + importFocusRequest.rect.x,
+      y: artboardRect.y + importFocusRequest.rect.y,
+      width: Math.max(1, importFocusRequest.rect.width),
+      height: Math.max(1, importFocusRequest.rect.height),
+    }
+    const availableWidth = Math.max(1, stageSize.width - IMPORT_FOCUS_PADDING_PX * 2)
+    const availableHeight = Math.max(1, stageSize.height - IMPORT_FOCUS_PADDING_PX * 2)
+    const fitScale = Math.min(
+      MAX_SCALE,
+      availableWidth / sceneRect.width,
+      availableHeight / sceneRect.height,
+    )
+    const nextScale = clampScale(Math.min(currentViewport.scale, fitScale))
+    const center = {
+      x: sceneRect.x + sceneRect.width / 2,
+      y: sceneRect.y + sceneRect.height / 2,
+    }
+
+    setViewport({
+      scale: nextScale,
+      x: stageSize.width / 2 - center.x * nextScale,
+      y: stageSize.height / 2 - center.y * nextScale,
+    })
+    clearImportFocusRequest(importFocusRequest.requestId)
+  }, [artboardRect, clearImportFocusRequest, importFocusRequest, setViewport, stageSize.height, stageSize.width])
 
   const startPan = (event: MouseEvent) => {
     event.preventDefault()
@@ -585,7 +647,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     transformer.nodes(nodes)
     transformer.getLayer()?.batchDraw()
-  }, [allowStageSelection, selectedIds, selectedStage, viewport.scale, viewport.x, viewport.y, selectedChildKey, showEngravePreview])
+  }, [allowStageSelection, selectedIds, selectedStage, selectedChildKey, showEngravePreview])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -684,6 +746,80 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     }
   }, [setViewport])
 
+  const getFocusScopeRect = useCallback((): MarqueeRect => {
+    const artboardScopeRect = getNodeScreenRect(artboardRef.current) ?? artboardRect
+    if (!effectiveFocusGroupId || !focusScopeContainerId) {
+      return artboardScopeRect
+    }
+
+    return getNodeScreenRect(nodeRefs.current.get(focusScopeContainerId) ?? null) ?? artboardScopeRect
+  }, [artboardRect, effectiveFocusGroupId, focusScopeContainerId])
+
+  const applyObjectSnapping = useCallback(
+    (nodeId: string) => {
+      const movingIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId]
+      const movingNodes = movingIds
+        .map((id) => nodeRefs.current.get(id))
+        .filter((node): node is Konva.Node => Boolean(node))
+
+      if (movingNodes.length === 0) {
+        clearSnapGuides()
+        return
+      }
+
+      const movingBounds = getBoundsForNodes(movingNodes)
+      if (!movingBounds) {
+        clearSnapGuides()
+        return
+      }
+
+      const excludedIds = new Set(movingIds.flatMap((id) => getSubtreeIds(id, nodesById)))
+      const guideNodes = selectableIds
+        .filter((id) => !excludedIds.has(id))
+        .map((id) => nodeRefs.current.get(id))
+        .filter((node): node is Konva.Node => node != null)
+        .filter((node) => node.isVisible())
+
+      const scopeRect = getFocusScopeRect()
+      const guides = getGuides(
+        getLineGuideStops(scopeRect, guideNodes),
+        movingBounds,
+        GUIDELINE_OFFSET,
+      )
+
+      if (guides.length === 0) {
+        clearSnapGuides()
+        return
+      }
+
+      const delta = guides.reduce(
+        (result, guide) => ({
+          x: guide.orientation === 'V' ? guide.delta : result.x,
+          y: guide.orientation === 'H' ? guide.delta : result.y,
+        }),
+        { x: 0, y: 0 },
+      )
+
+      movingNodes.forEach((node) => {
+        const absolutePosition = node.absolutePosition()
+        node.absolutePosition({
+          x: absolutePosition.x + delta.x,
+          y: absolutePosition.y + delta.y,
+        })
+      })
+
+      drawSnapGuides(guides, scopeRect)
+    },
+    [
+      clearSnapGuides,
+      drawSnapGuides,
+      getFocusScopeRect,
+      nodesById,
+      selectableIds,
+      selectedIds,
+    ],
+  )
+
   const syncArtboardTargetToState = (artboardTarget: Konva.Rect) => {
     const width = clamp(
       Math.round(artboardTarget.width() * artboardTarget.scaleX()),
@@ -711,7 +847,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     })
   }
 
-  const handleNodeDragStart = (nodeId: string) => {
+  const handleNodeDragStart = useCallback((nodeId: string) => {
     const ids = selectedIds.includes(nodeId) ? selectedIds : [nodeId]
     const positions: Record<string, { x: number; y: number }> = {}
     ids.forEach((id) => {
@@ -727,9 +863,9 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
       duplicateInPlace()
     }
     clearSnapGuides()
-  }
+  }, [clearSnapGuides, duplicateInPlace, pushHistory, selectedIds])
 
-  const handleNodeDragMove = (nodeId: string, konvaNode: Konva.Node) => {
+  const handleNodeDragMove = useCallback((nodeId: string, konvaNode: Konva.Node) => {
     if (selectedIds.length > 1) {
       const startPos = dragStartPositions.current[nodeId]
       if (!startPos) {
@@ -756,9 +892,9 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
 
     applyObjectSnapping(nodeId)
     updateNodeTransform(nodeId, { x: konvaNode.x(), y: konvaNode.y() })
-  }
+  }, [applyObjectSnapping, selectedIds, updateNodeTransform])
 
-  const handleNodeDragEnd = (nodeId: string, konvaNode: Konva.Node) => {
+  const handleNodeDragEnd = useCallback((nodeId: string, konvaNode: Konva.Node) => {
     clearSnapGuides()
     isDuplicateDragRef.current = false
 
@@ -774,71 +910,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     }
 
     dragStartPositions.current = {}
-  }
-
-  const getFocusScopeRect = (): MarqueeRect => {
-    const artboardScopeRect = getNodeScreenRect(artboardRef.current) ?? artboardRect
-    if (!effectiveFocusGroupId || !focusScopeContainerId) {
-      return artboardScopeRect
-    }
-
-    return getNodeScreenRect(nodeRefs.current.get(focusScopeContainerId) ?? null) ?? artboardScopeRect
-  }
-
-  const applyObjectSnapping = (nodeId: string) => {
-    const movingIds = selectedIds.includes(nodeId) ? selectedIds : [nodeId]
-    const movingNodes = movingIds
-      .map((id) => nodeRefs.current.get(id))
-      .filter((node): node is Konva.Node => Boolean(node))
-
-    if (movingNodes.length === 0) {
-      clearSnapGuides()
-      return
-    }
-
-    const movingBounds = getBoundsForNodes(movingNodes)
-    if (!movingBounds) {
-      clearSnapGuides()
-      return
-    }
-
-    const excludedIds = new Set(movingIds.flatMap((id) => getSubtreeIds(id, nodesById)))
-    const guideNodes = selectableIds
-      .filter((id) => !excludedIds.has(id))
-      .map((id) => nodeRefs.current.get(id))
-      .filter((node): node is Konva.Node => node != null)
-      .filter((node) => node.isVisible())
-
-    const scopeRect = getFocusScopeRect()
-    const guides = getGuides(
-      getLineGuideStops(scopeRect, guideNodes),
-      movingBounds,
-      GUIDELINE_OFFSET,
-    )
-
-    if (guides.length === 0) {
-      clearSnapGuides()
-      return
-    }
-
-    const delta = guides.reduce(
-      (result, guide) => ({
-        x: guide.orientation === 'V' ? guide.delta : result.x,
-        y: guide.orientation === 'H' ? guide.delta : result.y,
-      }),
-      { x: 0, y: 0 },
-    )
-
-    movingNodes.forEach((node) => {
-      const absolutePosition = node.absolutePosition()
-      node.absolutePosition({
-        x: absolutePosition.x + delta.x,
-        y: absolutePosition.y + delta.y,
-      })
-    })
-
-    drawSnapGuides(guides, scopeRect)
-  }
+  }, [clearSnapGuides, selectedIds, updateNodeTransform])
 
   const finishMarqueeSelection = (additive: boolean) => {
     const currentMarquee = marqueeRectRef.current
@@ -1111,6 +1183,75 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     }
   }
 
+  const onContextMenu = (event: KonvaEventObject<PointerEvent>) => {
+    event.evt.preventDefault()
+
+    if (pendingImport || interactionBlocked) {
+      return
+    }
+
+    const targetId = getContextMenuTargetId(event.target)
+    if (targetId && !selectedIds.includes(targetId)) {
+      selectMany([targetId])
+    }
+
+    setContextMenu({
+      isOpen: true,
+      x: event.evt.clientX,
+      y: event.evt.clientY,
+    })
+  }
+
+  const handleLibraryDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes(LIBRARY_DRAG_MIME)) {
+      return
+    }
+
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleLibraryDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    const rawPayload = event.dataTransfer.getData(LIBRARY_DRAG_MIME)
+    if (!rawPayload) {
+      return
+    }
+
+    const payload = parseLibraryDragPayload(rawPayload)
+    if (!payload) {
+      return
+    }
+
+    event.preventDefault()
+
+    const container = containerRef.current
+    if (!container) {
+      return
+    }
+
+    const bounds = container.getBoundingClientRect()
+    const scenePosition = screenToScene({
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    })
+
+    if (!containsPoint(artboardRect, scenePosition)) {
+      return
+    }
+
+    const artboardPosition = {
+      x: scenePosition.x - artboardRect.x,
+      y: scenePosition.y - artboardRect.y,
+    }
+
+    if (payload.itemType === 'generator') {
+      placeGenerator(payload.params, artboardPosition)
+      return
+    }
+
+    placeShape(payload.kind, artboardPosition)
+  }
+
   const onTransformStart = () => {
     pushHistory()
     clearSnapGuides()
@@ -1299,25 +1440,59 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   })()
 
   const panelHoveredId = useEditorStore((s) => s.hoveredId)
-  const outlineSourceIds = [...new Set([...selectedIds, ...(hoveredNodeId ? [hoveredNodeId] : []), ...(panelHoveredId ? [panelHoveredId] : [])])]
+  const outlineSourceIds = useMemo(
+    () => [
+      ...new Set([
+        ...selectedIds,
+        ...(hoveredNodeId ? [hoveredNodeId] : []),
+        ...(panelHoveredId ? [panelHoveredId] : []),
+      ]),
+    ],
+    [hoveredNodeId, panelHoveredId, selectedIds],
+  )
 
   // During an active transform, read current x/y/rotation/scale directly from
   // Konva node refs so the outline tracks the handles in real-time.
-  const liveTransforms = new Map<string, NodeLiveTransform>()
-  if (transformTick > 0) {
-    for (const id of selectedIds) {
-      const kn = nodeRefs.current.get(id)
-      if (kn) {
-        liveTransforms.set(id, {
-          x: kn.x(),
-          y: kn.y(),
-          rotation: kn.rotation(),
-          scaleX: kn.scaleX(),
-          scaleY: kn.scaleY(),
-        })
+  const liveTransforms = useMemo(() => {
+    const transforms = new Map<string, NodeLiveTransform>()
+    if (transformTick > 0) {
+      for (const id of selectedIds) {
+        const kn = nodeRefs.current.get(id)
+        if (kn) {
+          transforms.set(id, {
+            x: kn.x(),
+            y: kn.y(),
+            rotation: kn.rotation(),
+            scaleX: kn.scaleX(),
+            scaleY: kn.scaleY(),
+          })
+        }
       }
     }
-  }
+    return transforms
+  }, [selectedIds, transformTick])
+
+  const centerlineOverlayNodes = useMemo(
+    () =>
+      rootIds.map((nodeId) =>
+        renderCenterlineOverlayNode(
+          nodeId,
+          nodesById,
+          liveTransforms,
+          toolDiameter,
+          centerlinePathRefs.current,
+        ),
+      ),
+    [liveTransforms, nodesById, rootIds, toolDiameter],
+  )
+
+  const outlineOverlayNodes = useMemo(
+    () =>
+      outlineSourceIds.map((id) =>
+        renderOutlineNodeWithAncestors(id, nodesById, liveTransforms),
+      ),
+    [liveTransforms, nodesById, outlineSourceIds],
+  )
 
   const showFilledEyedropperCursor = eyedropperSourceNodeId !== null || eyedropperCursorFlashFilled
   const cursor =
@@ -1334,9 +1509,18 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
       ref={containerRef}
       className="relative h-full w-full overflow-hidden bg-background"
       style={{ cursor }}
+      onDragOver={handleLibraryDragOver}
+      onDrop={handleLibraryDrop}
     >
       {/* Dot grid background */}
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.035)_1px,transparent_1px)] bg-[size:32px_32px]" />
+
+      <EditorContextMenu
+        isOpen={contextMenu.isOpen}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        onOpenChange={(isOpen) => setContextMenu((current) => ({ ...current, isOpen }))}
+      />
 
       {/* Bottom floating toolbar */}
       <div className="pointer-events-none absolute inset-x-0 bottom-7 z-20 flex justify-center px-6">
@@ -1518,6 +1702,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
         onMouseUp={onPointerUp}
         onMouseLeave={() => setHoveredNodeId(null)}
         onClick={onStageClick}
+        onContextMenu={onContextMenu}
         onWheel={handleWheel}
       >
         <Layer>
@@ -1667,7 +1852,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                         <Group key={`${nodeId}-${r}-${c}`} x={c * (cellW + colGap)} y={r * (cellH + rowGap)} listening={false}>
                           <ShapeRenderer
                             nodeId={nodeId}
-                            registerNodeRef={() => {}}
+                            registerNodeRef={noopRegisterNodeRef}
                             interactionBlocked
                             showCncOverrides={showOutlines}
                             outlineOnly={showOutlines}
@@ -1680,7 +1865,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
                 return <React.Fragment key={nodeId}>{copies}</React.Fragment>
               })}
 
-            {rootIds.map((nodeId) => renderCenterlineOverlayNode(nodeId, nodesById, liveTransforms, toolDiameter, centerlinePathRefs.current))}
+            {centerlineOverlayNodes}
 
             {/* Grid gap handles for selected grid nodes */}
             {selectedIds.map((nodeId) => {
@@ -1897,7 +2082,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
         {/* Illustrator-style thin path outline overlay — document space */}
         <Layer x={viewport.x} y={viewport.y} scaleX={viewport.scale} scaleY={viewport.scale} listening={false}>
           <Group x={artboardRect.x} y={artboardRect.y}>
-            {outlineSourceIds.map((id) => renderOutlineNodeWithAncestors(id, nodesById, liveTransforms))}
+            {outlineOverlayNodes}
           </Group>
         </Layer>
 

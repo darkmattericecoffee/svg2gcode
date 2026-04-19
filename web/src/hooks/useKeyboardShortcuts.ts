@@ -6,7 +6,11 @@ import { useEditorStore } from '../store'
 export function useKeyboardShortcuts() {
   const deleteSelected = useEditorStore((state) => state.deleteSelected)
   const copySelected = useEditorStore((state) => state.copySelected)
+  const cutSelected = useEditorStore((state) => state.cutSelected)
   const pasteClipboard = useEditorStore((state) => state.pasteClipboard)
+  const groupSelected = useEditorStore((state) => state.groupSelected)
+  const ungroupSelected = useEditorStore((state) => state.ungroupSelected)
+  const orderSelected = useEditorStore((state) => state.orderSelected)
   const selectAll = useEditorStore((state) => state.selectAll)
   const clearSelection = useEditorStore((state) => state.clearSelection)
   const undo = useEditorStore((state) => state.undo)
@@ -46,14 +50,29 @@ export function useKeyboardShortcuts() {
             event.preventDefault()
             pasteClipboard()
             return
+          case '[':
+            event.preventDefault()
+            orderSelected(event.shiftKey ? 'back' : 'backward')
+            return
+          case ']':
+            event.preventDefault()
+            orderSelected(event.shiftKey ? 'front' : 'forward')
+            return
           case 'd':
             event.preventDefault()
             clearSelection()
             return
           case 'x':
             event.preventDefault()
-            copySelected()
-            deleteSelected()
+            cutSelected()
+            return
+          case 'g':
+            event.preventDefault()
+            if (event.shiftKey) {
+              ungroupSelected()
+            } else {
+              groupSelected()
+            }
             return
           case 'z':
             event.preventDefault()
@@ -118,15 +137,19 @@ export function useKeyboardShortcuts() {
     clearPendingImport,
     clearSelection,
     copySelected,
+    cutSelected,
     deleteSelected,
     eyedropperMode,
+    groupSelected,
     pasteClipboard,
     pendingImport,
+    orderSelected,
     redo,
     selectAll,
     setDirectSelectionModifierActive,
     setEyedropperMode,
     setImportStatus,
+    ungroupSelected,
     undo,
   ])
 }

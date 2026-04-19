@@ -1,131 +1,64 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Card, SearchField } from '@heroui/react'
 import { Sparkles } from '@gravity-ui/icons'
 
-import dominoImage from '../../assets/library/domino.png'
-import dowelImage from '../../assets/library/dowel.png'
-import scallopFrameImage from '../../assets/library/scallop-frame.svg'
+import {
+  LIBRARY_DRAG_MIME,
+  LIBRARY_ITEMS,
+  createLibraryDragPayload,
+} from '../../lib/libraryItems'
 import { useEditorStore } from '../../store'
-import type {
-  DowelHoleParams,
-  GeneratorParams,
-  GroupNode,
-  ScallopFrameParams,
-  TenonParams,
-} from '../../types/editor'
-import { DowelHoleForm } from './DowelHoleForm'
-import { ScallopFrameForm } from './ScallopFrameForm'
-import { TenonForm } from './TenonForm'
-
-const DEFAULT_TENON: TenonParams = {
-  kind: 'tenon',
-  name: 'Tenon',
-  width: 10,
-  height: 20,
-  matchToolWidth: false,
-  rowCount: 1,
-  colCount: 1,
-  rowSpacing: 30,
-  colSpacing: 30,
-  outputType: 'pocket',
-}
-
-const DEFAULT_DOWEL: DowelHoleParams = {
-  kind: 'dowelHole',
-  name: 'Dowel Hole',
-  diameter: 8,
-  matchToolDiameter: false,
-  rowCount: 1,
-  colCount: 1,
-  rowSpacing: 30,
-  colSpacing: 30,
-  outputType: 'pocket',
-}
-
-const DEFAULT_SCALLOP_FRAME: ScallopFrameParams = {
-  kind: 'scallopFrame',
-  name: 'Scallop Frame',
-  width: 120,
-  height: 90,
-  minScallopSize: 12,
-  outputType: 'contour',
-}
-
-interface GeneratorCard {
-  kind: GeneratorParams['kind']
-  label: string
-  description: string
-  imageSrc: string
-  tags: string[]
-  defaultParams: GeneratorParams
-}
-
-const GENERATORS: GeneratorCard[] = [
-  {
-    kind: 'tenon',
-    label: 'Tenon / Domino',
-    description: 'Rectangular mortise pocket or contour for repeatable joinery.',
-    imageSrc: dominoImage,
-    tags: ['tenon', 'domino', 'mortise', 'joinery'],
-    defaultParams: DEFAULT_TENON,
-  },
-  {
-    kind: 'dowelHole',
-    label: 'Dowel Hole',
-    description: 'Circular dowel placements for drilled or pocketed alignment holes.',
-    imageSrc: dowelImage,
-    tags: ['dowel', 'hole', 'drill', 'joinery'],
-    defaultParams: DEFAULT_DOWEL,
-  },
-  {
-    kind: 'scallopFrame',
-    label: 'Scallop Frame',
-    description: 'Decorative scalloped rectangle that regenerates as you resize it.',
-    imageSrc: scallopFrameImage,
-    tags: ['scallop', 'frame', 'border', 'decorative'],
-    defaultParams: DEFAULT_SCALLOP_FRAME,
-  },
-]
+import type { BasicShapeKind, GeneratorParams } from '../../types/editor'
 
 function cn(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')
 }
 
+function ShapePreview({ kind }: { kind: BasicShapeKind }) {
+  return (
+    <div className="flex aspect-square w-10 shrink-0 items-center justify-center rounded-md border border-border bg-content1">
+      <svg
+        aria-hidden="true"
+        className="h-7 w-7 text-foreground"
+        viewBox="0 0 48 48"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        {kind === 'rectangle' ? (
+          <rect x="8" y="12" width="32" height="24" rx="3" stroke="currentColor" strokeWidth="3" />
+        ) : kind === 'circle' ? (
+          <circle cx="24" cy="24" r="15" stroke="currentColor" strokeWidth="3" />
+        ) : (
+          <path d="M24 8L40 38H8L24 8Z" stroke="currentColor" strokeWidth="3" strokeLinejoin="round" />
+        )}
+      </svg>
+    </div>
+  )
+}
+
 export function LibraryPanel() {
-  const selectedIds = useEditorStore((s) => s.selectedIds)
-  const nodesById = useEditorStore((s) => s.nodesById)
-  const setLeftPanelTab = useEditorStore((s) => s.setLeftPanelTab)
   const placeGenerator = useEditorStore((s) => s.placeGenerator)
-  const updateGeneratorParams = useEditorStore((s) => s.updateGeneratorParams)
-
+  const placeShape = useEditorStore((s) => s.placeShape)
   const [query, setQuery] = useState('')
-  const [activeKind, setActiveKind] = useState<GeneratorParams['kind'] | null>(null)
 
-  const selectedGeneratorNode = useMemo(() => {
-    if (selectedIds.length !== 1) return null
-    const node = nodesById[selectedIds[0]]
-    if (!node || node.type !== 'group') return null
-    return (node as GroupNode).generatorMetadata ? (node as GroupNode) : null
-  }, [selectedIds, nodesById])
-
-  useEffect(() => {
-    if (selectedGeneratorNode) {
-      setLeftPanelTab('library')
-    }
-  }, [selectedGeneratorNode, setLeftPanelTab])
-
-  const editingKind = selectedGeneratorNode?.generatorMetadata?.params.kind ?? null
-
-  const filteredGenerators = GENERATORS.filter((generator) => {
-    if (editingKind === generator.kind) return true
-    if (!query.trim()) return true
-    const normalizedQuery = query.trim().toLowerCase()
+  const normalizedQuery = query.trim().toLowerCase()
+  const filteredItems = LIBRARY_ITEMS.filter((item) => {
+    if (!normalizedQuery) return true
     return (
-      generator.label.toLowerCase().includes(normalizedQuery) ||
-      generator.description.toLowerCase().includes(normalizedQuery) ||
-      generator.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery))
+      item.label.toLowerCase().includes(normalizedQuery) ||
+      item.description.toLowerCase().includes(normalizedQuery) ||
+      item.tags.some((tag) => tag.toLowerCase().includes(normalizedQuery))
     )
   })
+
+  const addItemToArtboard = (item: (typeof LIBRARY_ITEMS)[number]) => {
+    if (item.itemType === 'generator') {
+      placeGenerator(item.defaultParams as GeneratorParams)
+      return
+    }
+
+    placeShape(item.kind)
+  }
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -158,114 +91,69 @@ export function LibraryPanel() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {filteredGenerators.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border bg-[var(--surface)] px-4 py-6 text-center text-sm text-muted-foreground">
+        {filteredItems.length === 0 ? (
+          <p className="rounded-md border border-dashed border-border bg-[var(--surface)] px-4 py-6 text-center text-sm text-muted-foreground">
             No library items match your search.
           </p>
         ) : (
-          <div className="space-y-4">
-            {filteredGenerators.map((card) => {
-              const isEditing = editingKind === card.kind
-              const isExpanded = isEditing || activeKind === card.kind
-              const selectedNodeId = isEditing ? selectedGeneratorNode?.id : undefined
-              const selectedParams = isEditing ? selectedGeneratorNode?.generatorMetadata?.params : null
+          <div className="space-y-2">
+            {filteredItems.map((item) => {
+              const dragPayload = createLibraryDragPayload(item)
 
               return (
                 <Card
-                  key={card.kind}
+                  key={`${item.itemType}-${item.kind}`}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = 'copy'
+                    event.dataTransfer.setData(LIBRARY_DRAG_MIME, JSON.stringify(dragPayload))
+                  }}
                   className={cn(
-                    'overflow-hidden border border-border bg-[var(--surface)] shadow-none transition-colors',
-                    isExpanded && 'border-primary/40 bg-[var(--surface-secondary)]',
+                    'group relative cursor-grab overflow-hidden rounded-md border border-border bg-[var(--surface)] shadow-none',
+                    'transition-all duration-150 ease-out active:cursor-grabbing',
+                    'hover:-translate-y-0.5 hover:scale-[1.01] hover:border-primary/40 hover:bg-[var(--surface-secondary)] hover:shadow-[0_10px_24px_rgba(0,0,0,0.18)]',
                   )}
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isEditing) return
-                      setActiveKind((current) => current === card.kind ? null : card.kind)
-                    }}
-                    className="w-full cursor-pointer text-left"
-                  >
-                    <Card.Header className="flex flex-row items-center gap-3 p-4">
-                      <img
-                        alt={card.label}
-                        className="pointer-events-none aspect-square w-12 shrink-0 rounded-2xl object-cover select-none"
-                        loading="lazy"
-                        src={card.imageSrc}
-                      />
-                      <div className="min-w-0 flex-1 self-center">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
-                            <Card.Title className="truncate text-sm font-semibold text-foreground">
-                              {card.label}
-                            </Card.Title>
-                          </div>
-                          <Card.Description className="mt-1 text-xs leading-5 text-muted-foreground">
-                            {card.description}
-                          </Card.Description>
-                          {isEditing ? (
-                            <div className="mt-3">
-                              <span className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary">
-                                Editing
-                              </span>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </Card.Header>
-                  </button>
-
-                  {isExpanded ? (
-                    <Card.Content className="border-t border-border px-4 py-4">
-                      {card.kind === 'tenon' ? (
-                        <TenonForm
-                          initialParams={(selectedParams && selectedParams.kind === 'tenon')
-                            ? selectedParams
-                            : DEFAULT_TENON}
-                          mode={isEditing ? 'edit' : 'new'}
-                          nodeId={selectedNodeId}
-                          onPlace={isEditing ? undefined : (params) => {
-                            placeGenerator(params)
-                            setActiveKind(null)
-                          }}
-                          onUpdate={isEditing && selectedNodeId
-                            ? (params) => updateGeneratorParams(selectedNodeId, params)
-                            : undefined}
-                        />
-                      ) : card.kind === 'dowelHole' ? (
-                        <DowelHoleForm
-                          initialParams={(selectedParams && selectedParams.kind === 'dowelHole')
-                            ? selectedParams
-                            : DEFAULT_DOWEL}
-                          mode={isEditing ? 'edit' : 'new'}
-                          nodeId={selectedNodeId}
-                          onPlace={isEditing ? undefined : (params) => {
-                            placeGenerator(params)
-                            setActiveKind(null)
-                          }}
-                          onUpdate={isEditing && selectedNodeId
-                            ? (params) => updateGeneratorParams(selectedNodeId, params)
-                            : undefined}
+                  <Card.Header className="flex flex-col p-3">
+                    <div className="flex min-w-0 items-center gap-3 pr-9">
+                      {item.itemType === 'generator' ? (
+                        <img
+                          alt={item.label}
+                          className="pointer-events-none aspect-square w-10 shrink-0 rounded-md object-cover select-none"
+                          loading="lazy"
+                          src={item.imageSrc}
+                          draggable={false}
                         />
                       ) : (
-                        <ScallopFrameForm
-                          initialParams={(selectedParams && selectedParams.kind === 'scallopFrame')
-                            ? selectedParams
-                            : DEFAULT_SCALLOP_FRAME}
-                          mode={isEditing ? 'edit' : 'new'}
-                          nodeId={selectedNodeId}
-                          onPlace={isEditing ? undefined : (params) => {
-                            placeGenerator(params)
-                            setActiveKind(null)
-                          }}
-                          onUpdate={isEditing && selectedNodeId
-                            ? (params) => updateGeneratorParams(selectedNodeId, params)
-                            : undefined}
-                        />
+                        <ShapePreview kind={item.kind} />
                       )}
-                    </Card.Content>
-                  ) : null}
+                      <div className="min-w-0 flex-1 self-center">
+                        <div className="flex items-center gap-1.5">
+                          {item.itemType === 'generator' ? (
+                            <Sparkles className="h-3 w-3 shrink-0 text-primary" />
+                          ) : null}
+                          <Card.Title className="truncate text-sm font-semibold text-foreground">
+                            {item.label}
+                          </Card.Title>
+                        </div>
+                        <Card.Description className="mt-0.5 overflow-hidden text-[11px] leading-4 text-muted-foreground [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">
+                          {item.description}
+                        </Card.Description>
+                      </div>
+                    </div>
+                  </Card.Header>
+                  <button
+                    type="button"
+                    aria-label={`Add ${item.label} to artboard`}
+                    title="Add to artboard"
+                    className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 scale-90 items-center justify-center rounded-md bg-primary text-lg font-medium leading-none text-primary-foreground opacity-0 shadow-[0_8px_18px_rgba(0,0,0,0.2)] transition-all duration-150 hover:opacity-90 focus:scale-100 focus:opacity-100 group-hover:scale-100 group-hover:opacity-100 group-focus-within:scale-100 group-focus-within:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      addItemToArtboard(item)
+                    }}
+                  >
+                    +
+                  </button>
                 </Card>
               )
             })}
