@@ -36,11 +36,12 @@ export function buildBridgeSettings(
     ...base,
     conversion: {
       ...base.conversion,
-      // 0.05 mm curve tolerance — handheld CNC accuracy is nowhere near the
-      // 0.002 mm lib default. Looser tolerance lets arc-fitting collapse
-      // organic Beziers into a handful of G2/G3 segments instead of thousands
-      // of tiny G1s.
-      tolerance: 0.05,
+      // 0.01 mm curve tolerance — fine enough that offset polylines from
+      // i_overlay are nearly smooth on letter glyph pockets, which lets the
+      // tangent-continuous arc refitter collapse them into clean G2/G3
+      // segments. Lines falling back for cornered regions stay at this
+      // resolution and look visually smooth on any viewer.
+      tolerance: 0.01,
       optimize_path_order: machining.optimizePathOrder,
       cluster_detour_radius:
         machining.clusterDetourRadius != null && machining.clusterDetourRadius > 0

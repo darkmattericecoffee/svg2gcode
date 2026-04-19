@@ -3,6 +3,7 @@ use lyon_geom::{
     Arc, ArcFlags, CubicBezierSegment, Line, LineSegment, Point, Scalar, SvgArc, Transform, Vector,
 };
 
+#[derive(Debug, Clone, Copy)]
 pub enum ArcOrLineSegment<S> {
     Arc(SvgArc<S>),
     Line(LineSegment<S>),
