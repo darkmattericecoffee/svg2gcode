@@ -53,6 +53,10 @@ pub struct FrontendOperation {
     pub fill_mode: Option<String>,
     #[serde(default)]
     pub allow_thicken_routing: bool,
+    /// Minimum cut-order index across the operation's contributing elements.
+    /// Stamped into the operation marker so the parser can preserve ordering.
+    #[serde(default)]
+    pub cut_order_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +73,9 @@ pub struct OperationLineRange {
     pub color: Option<String>,
     pub start_line: usize,
     pub end_line: usize,
+    /// Cut-order index decoded from the `;operation:start:` marker when present.
+    #[serde(default)]
+    pub cut_order_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +233,7 @@ fn generate_job(request: GenerateJobRequest, on_progress: &Option<js_sys::Functi
                 .as_deref()
                 .and_then(|s| s.parse().ok()),
             allow_thicken_routing: operation.allow_thicken_routing,
+            cut_order_index: operation.cut_order_index,
         })
         .collect::<Vec<_>>();
 
@@ -295,19 +303,22 @@ fn extract_operation_ranges(
         .collect();
 
     let mut ranges = Vec::new();
-    // Track the active block: (operation_id, operation_name, color, start_line)
-    let mut active: Option<(String, String, Option<String>, usize)> = None;
+    // Track the active block.
+    let mut active: Option<(String, String, Option<String>, Option<i64>, usize)> = None;
 
     for (index, line) in gcode.lines().enumerate() {
         let line_number = index + 1;
         let trimmed = line.trim();
 
         if let Some(rest) = trimmed.strip_prefix(";operation:start:") {
-            // Format: operation:start:{id}:{name}
-            let (op_id, op_name) = rest
-                .split_once(':')
-                .map(|(id, name)| (id.to_string(), name.to_string()))
-                .unwrap_or_else(|| (rest.to_string(), rest.to_string()));
+            // Format (new): operation:start:{id}:{cut_order_index}:{name}
+            // Format (legacy): operation:start:{id}:{name}
+            //
+            // `{id}` itself may contain `:` when paired with `::` separators in
+            // composite keys, but never a bare `:` delimiter, so splitting from
+            // the right works. We look at the second-to-last segment to detect
+            // whether a numeric cut-order index is present.
+            let (op_id, cut_order_index, op_name) = parse_operation_start_marker(rest);
 
             // Look up color by exact ID; fall back to parent color for "-thickened" suffix.
             let color = color_map
@@ -322,9 +333,9 @@ fn extract_operation_ranges(
                         .flatten()
                 });
 
-            active = Some((op_id, op_name, color, line_number + 1));
+            active = Some((op_id, op_name, color, cut_order_index, line_number + 1));
         } else if let Some(end_id) = trimmed.strip_prefix(";operation:end:") {
-            if let Some((op_id, op_name, color, start_line)) = active.take() {
+            if let Some((op_id, op_name, color, cut_order_index, start_line)) = active.take() {
                 if op_id == end_id {
                     ranges.push(OperationLineRange {
                         operation_id: op_id,
@@ -332,6 +343,7 @@ fn extract_operation_ranges(
                         color,
                         start_line,
                         end_line: line_number.saturating_sub(1),
+                        cut_order_index,
                     });
                 }
             }
@@ -339,17 +351,67 @@ fn extract_operation_ranges(
     }
 
     // Handle an unclosed block at end of GCode.
-    if let Some((op_id, op_name, color, start_line)) = active {
+    if let Some((op_id, op_name, color, cut_order_index, start_line)) = active {
         ranges.push(OperationLineRange {
             operation_id: op_id,
             operation_name: op_name,
             color,
             start_line,
             end_line: gcode.lines().count(),
+            cut_order_index,
         });
     }
 
     ranges
+}
+
+/// Parse the body of a `;operation:start:` comment into (id, cut_order_index, name).
+/// Accepts both the new `{id}:{index}:{name}` format and the legacy `{id}:{name}`
+/// format — if the field before the name parses as an integer, treat it as the index.
+fn parse_operation_start_marker(body: &str) -> (String, Option<i64>, String) {
+    // Peel `name` off the right. `id` can contain `:` (via `::`), so we can't
+    // just split from the left; instead we walk candidate splits and keep the
+    // earliest one whose remainder looks like either "{integer}:{name}" or is
+    // accepted as legacy "{name}".
+    //
+    // Strategy: split into all `:` boundaries, find the rightmost boundary where
+    // the left side could be an id (never empty, and — for the new format — the
+    // character just before it is not `:` so we don't break up `::`).
+    let bytes = body.as_bytes();
+    let mut colon_positions: Vec<usize> = bytes
+        .iter()
+        .enumerate()
+        .filter(|&(_, &b)| b == b':')
+        .map(|(i, _)| i)
+        .collect();
+    // Drop positions that are part of a `::` pair so "profile-…::__root__::3"
+    // stays intact as the id.
+    colon_positions.retain(|&i| {
+        let prev = i.checked_sub(1).map(|j| bytes[j]) != Some(b':');
+        let next = bytes.get(i + 1) != Some(&b':');
+        prev && next
+    });
+
+    if let Some(&last) = colon_positions.last() {
+        let (left, right_with_colon) = body.split_at(last);
+        let right = &right_with_colon[1..];
+
+        // New format: second-to-last delimiter separates id from cut_order_index.
+        if colon_positions.len() >= 2 {
+            let second_to_last = colon_positions[colon_positions.len() - 2];
+            let id_part = &body[..second_to_last];
+            let maybe_index = &body[second_to_last + 1..last];
+            if let Ok(idx) = maybe_index.parse::<i64>() {
+                return (id_part.to_string(), Some(idx), right.to_string());
+            }
+        }
+
+        // Legacy format: single delimiter — id:name.
+        return (left.to_string(), None, right.to_string());
+    }
+
+    // No delimiter — treat the whole body as both id and name.
+    (body.to_string(), None, body.to_string())
 }
 
 fn collect_class_styles(root: &Element) -> Result<HashMap<String, HashMap<String, String>>, String> {

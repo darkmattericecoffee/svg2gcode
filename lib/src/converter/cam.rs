@@ -156,6 +156,11 @@ struct OperationGroup {
 struct ScheduledOperationGroup {
     operation_id: String,
     operation_name: String,
+    /// Minimum cut-order index for the owning operation. Used to sort the
+    /// scheduler output so emission follows the frontend's `cutOrder.ts`
+    /// result. `None` means the frontend did not supply ordering and we keep
+    /// input order as a stable tie-break.
+    cut_order_index: Option<i64>,
     group: OperationGroup,
 }
 
@@ -1390,6 +1395,7 @@ fn optimize_scheduled_operation_groups_from(
 fn schedule_operation_groups(
     operation_id: &str,
     operation_name: &str,
+    cut_order_index: Option<i64>,
     groups: Vec<OperationGroup>,
 ) -> Vec<ScheduledOperationGroup> {
     groups
@@ -1397,6 +1403,7 @@ fn schedule_operation_groups(
         .map(|group| ScheduledOperationGroup {
             operation_id: operation_id.to_string(),
             operation_name: operation_name.to_string(),
+            cut_order_index,
             group,
         })
         .collect()
@@ -1572,9 +1579,21 @@ fn emit_scheduled_groups_in_order<'input>(
     machine: &mut Machine<'input>,
     engraving: &EngravingConfig,
     tolerance: f64,
-    scheduled_groups: Vec<ScheduledOperationGroup>,
+    mut scheduled_groups: Vec<ScheduledOperationGroup>,
     mut current: Point<f64>,
 ) -> Point<f64> {
+    // Respect the frontend's cut-order. `sort_by` is stable, so operations
+    // without an explicit index keep their input position — that matches the
+    // legacy behaviour for CLI callers and tests that never set an index.
+    // Operations with an index come first, sorted ascending, so user-specified
+    // ordering wins over the default input order.
+    scheduled_groups.sort_by(|a, b| match (a.cut_order_index, b.cut_order_index) {
+        (Some(ax), Some(bx)) => ax.cmp(&bx),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+
     let mut cursor = 0;
     while cursor < scheduled_groups.len() {
         let op_id = scheduled_groups[cursor].operation_id.clone();
@@ -1593,6 +1612,7 @@ fn emit_scheduled_groups_in_order<'input>(
                 program,
                 &scheduled.operation_id,
                 &scheduled.operation_name,
+                scheduled.cut_order_index,
             );
             append_engraving_paths(
                 program,
@@ -2056,11 +2076,22 @@ fn append_operation_start_marker<'input>(
     program: &mut Vec<Token<'input>>,
     operation_id: &str,
     operation_name: &str,
+    cut_order_index: Option<i64>,
 ) {
-    program.push(comment_token(format!(
-        "operation:start:{}:{}",
-        operation_id, operation_name
-    )));
+    // New format stamps the cut-order index between id and name so the parser
+    // can round-trip operation ordering without having to reproduce the
+    // scheduler. When the frontend didn't supply an index, fall back to the
+    // legacy `{id}:{name}` shape so older parsers stay compatible.
+    match cut_order_index {
+        Some(index) => program.push(comment_token(format!(
+            "operation:start:{}:{}:{}",
+            operation_id, index, operation_name
+        ))),
+        None => program.push(comment_token(format!(
+            "operation:start:{}:{}",
+            operation_id, operation_name
+        ))),
+    }
 }
 
 fn append_operation_end_marker<'input>(program: &mut Vec<Token<'input>>, operation_id: &str) {
@@ -2195,6 +2226,7 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
             scheduled_groups.extend(schedule_operation_groups(
                 &operation.id,
                 &operation.name,
+                operation.cut_order_index,
                 groups,
             ));
         }
@@ -2208,6 +2240,7 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
             scheduled_groups.extend(schedule_operation_groups(
                 &thickened_id,
                 &thickened_name,
+                operation.cut_order_index,
                 optimized,
             ));
         }
@@ -2222,14 +2255,15 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
     }
 
     // Partition into jobs when the frontend provided a non-empty plan.
-    // `None` or a single-job plan preserves the legacy single-anchor path so
-    // existing callers (CLI, tests, and any consumer that ignores jobs) emit
-    // byte-identical output to before.
+    // `None` (jobs disabled / legacy CLI path) keeps the byte-identical
+    // single-anchor path. Any `Some(_)` plan — including a single-job plan —
+    // emits `; === JOB` headers so the parser can always round-trip the
+    // frontend's job structure without guessing.
     let job_partitions =
         partition_scheduled_groups_by_job(&scheduled_groups, config.jobs.as_deref());
 
     match job_partitions {
-        Some(partitions) if partitions.len() > 1 => {
+        Some(partitions) => {
             let total_jobs = partitions.len();
             append_engraving_program_header(&mut program, &mut machine);
             for (job_index, (job, chunk_indices)) in partitions.into_iter().enumerate() {
@@ -2286,9 +2320,10 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
                 );
             }
         }
-        _ => {
-            // Single-job (or no-job) path — behaves exactly like today:
-            // metadata comments first, then program header, then ops.
+        None => {
+            // Jobs disabled (CLI / legacy callers). Byte-identical to the
+            // pre-jobs output: metadata comments first, then program header,
+            // then ops.
             let anchor_point = anchor_point_for_bounds(config.anchor, cut_bounds);
             let anchor_offset = Vector::new(-anchor_point.x, -anchor_point.y);
             let shifted_bounds = translate_bounds(cut_bounds, anchor_offset);

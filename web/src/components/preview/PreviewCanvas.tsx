@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState } from 'react'
 import * as THREE from 'three'
 import { advanceProgramDistance, sampleProgramAtDistance } from '@svg2gcode/bridge/viewer'
+import type { JobSpan, ParsedProgram } from '@svg2gcode/bridge/viewer'
 
 import { useEditorStore } from '../../store'
 import { MATERIAL_PRESETS } from '../../lib/materialPresets'
@@ -25,6 +26,7 @@ export function PreviewCanvas() {
   const showRapidMoves = useEditorStore((s) => s.preview.showRapidMoves)
   const showSvgOverlay = useEditorStore((s) => s.preview.showSvgOverlay)
   const showCutOrder = useEditorStore((s) => s.preview.showCutOrder)
+  const showJobOrder = useEditorStore((s) => s.preview.showJobOrder)
   const setPlaybackDistance = useEditorStore((s) => s.setPlaybackDistance)
   const setSceneReady = useEditorStore((s) => s.setSceneReady)
   const materialPreset = useEditorStore((s) => s.preview.materialPreset)
@@ -262,21 +264,24 @@ export function PreviewCanvas() {
     }
   }, [sceneRef, toolpaths, parsedProgram, showCutOrder, requestRender])
 
-  // Build per-job overlays (dashed bounds + crosshair + label) in the 3D scene.
+  // Build per-job overlays (bounds + starting anchor + BL offset guides) in the 3D scene.
   useEffect(() => {
     const state = sceneRef.current
     if (!state) return
     disposeJobOverlays(state.jobsGroup)
-    const jobs = parsedProgram?.jobs ?? []
-    if (jobs.length > 1) {
-      const overlay = buildJobOverlays(jobs)
+    const jobs = jobsForLayoutOverlay(parsedProgram)
+    if (showJobOrder && jobs.length > 0 && previewSnapshot) {
+      const overlay = buildJobOverlays(jobs, {
+        width: previewSnapshot.material_width,
+        height: previewSnapshot.material_height,
+      })
       for (const child of [...overlay.children]) state.jobsGroup.add(child)
     }
     requestRender()
     return () => {
       disposeJobOverlays(state.jobsGroup)
     }
-  }, [sceneRef, parsedProgram, requestRender])
+  }, [sceneRef, parsedProgram, previewSnapshot, showJobOrder, requestRender])
 
   // Detect job_stop events and surface the realign overlay card.
   useEffect(() => {
@@ -443,4 +448,44 @@ export function PreviewCanvas() {
       )}
     </div>
   )
+}
+
+function jobsForLayoutOverlay(
+  parsedProgram: ParsedProgram | null,
+): JobSpan[] {
+  if (!parsedProgram) return []
+  const explicitJobs = Array.isArray(parsedProgram.jobs) ? parsedProgram.jobs : []
+  if (explicitJobs.length > 0) return explicitJobs
+  if (!parsedProgram.bounds) return []
+
+  const offset = pointOrZero(parsedProgram.previewOffset)
+  return [{
+    jobId: 'implicit-job-1',
+    jobName: 'Job 1',
+    jobIndex: 1,
+    jobTotal: 1,
+    bounds: {
+      minX: parsedProgram.bounds.minX - offset.x,
+      minY: parsedProgram.bounds.minY - offset.y,
+      maxX: parsedProgram.bounds.maxX - offset.x,
+      maxY: parsedProgram.bounds.maxY - offset.y,
+    },
+    anchor: 'Center',
+    crossOffsetFromArtboardBL: { x: offset.x, y: offset.y },
+    previewOffset: offset,
+    startLine: 1,
+    endLine: Number.MAX_SAFE_INTEGER,
+    isBigSpanner: false,
+  }]
+}
+
+function pointOrZero(point: { x: number; y: number } | undefined): { x: number; y: number } {
+  return {
+    x: finiteOrZero(point?.x),
+    y: finiteOrZero(point?.y),
+  }
+}
+
+function finiteOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }

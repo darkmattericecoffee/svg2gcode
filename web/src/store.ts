@@ -188,6 +188,7 @@ export interface EditorStore {
   setShowStock: (show: boolean) => void
   setShowRapidMoves: (show: boolean) => void
   setShowCutOrder: (show: boolean) => void
+  setShowJobOrder: (show: boolean) => void
   setMaterialPreset: (preset: MaterialPreset) => void
   setSceneReady: (ready: boolean) => void
   initPreview: (result: import('@svg2gcode/bridge').GenerateJobResponse) => Promise<void>
@@ -1784,6 +1785,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     showStock: true,
     showRapidMoves: false,
     showCutOrder: false,
+    showJobOrder: false,
     materialPreset: DEFAULT_MATERIAL,
     initProgress: null,
     isSceneReady: true,
@@ -1853,6 +1855,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setShowCutOrder: (show) => {
     set((state) => ({
       preview: { ...state.preview, showCutOrder: show },
+    }))
+  },
+  setShowJobOrder: (show) => {
+    set((state) => ({
+      preview: { ...state.preview, showJobOrder: show },
     }))
   },
   setMaterialPreset: (preset) => {

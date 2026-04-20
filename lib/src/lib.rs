@@ -997,6 +997,7 @@ mod test {
                 target_depth: 1.0,
                 fill_mode: None,
                 allow_thicken_routing: false,
+                cut_order_index: None,
             },
             EngravingOperation {
                 id: "right-op".into(),
@@ -1005,6 +1006,7 @@ mod test {
                 target_depth: 2.0,
                 fill_mode: None,
                 allow_thicken_routing: false,
+                cut_order_index: None,
             },
         ];
 

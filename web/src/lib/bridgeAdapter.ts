@@ -224,133 +224,71 @@ export async function prepareGenerationInputs(
 }
 
 /**
- * Resolve ComputedJob → JobSpec by mapping each job's editor nodeIds to the
- * FrontendOperation ids they produced. An editor leaf becomes one or more
- * ArtObject element assignments; each derived operation bundles elements by
- * `cutOrderGroupId` (which embeds the nodeId's cut-order group).
+ * Resolve ComputedJob → JobSpec.
  *
- * When the mapping is ambiguous (no operations can be assigned to a job, or a
- * single operation spans multiple jobs), we return `null` so Rust falls back
- * to single-job emission instead of producing a malformed partition.
+ * Most operations carry an explicit `jobId` stamped during
+ * `applyEditorCncMetadata`. For the minority that don't (e.g. synthesized
+ * centerline exports whose leaf nodeIds weren't in the editor's cut-order
+ * sequence), we recover by looking at the operation's `assigned_element_ids`:
+ * each composite element id starts with `<artObjectId>::…`, and every
+ * ComputedJob's `nodeIds` contains the owning leaf. If that still doesn't
+ * match, we fall back to the first ComputedJob so generation stays viable
+ * rather than exploding mid-export.
+ *
+ * Callers should only invoke this when `jobsEnabled === true`; returning
+ * `null` signals "no jobs to emit".
  */
 export function jobSpecsFromComputedJobs(
   computedJobs: ComputedJob[],
   operations: FrontendOperation[],
-  artObjects: ArtObject[],
+  _artObjects: ArtObject[],
 ): JobSpec[] | null {
-  if (computedJobs.length <= 1 || operations.length === 0) return null
+  if (computedJobs.length === 0 || operations.length === 0) return null
 
-  const operationsByExplicitJobId = new Map<string, string[]>()
-  let explicitCount = 0
-  for (const operation of operations) {
-    if (!operation.jobId) continue
-    explicitCount += 1
-    const list = operationsByExplicitJobId.get(operation.jobId) ?? []
-    list.push(operation.id)
-    operationsByExplicitJobId.set(operation.jobId, list)
-  }
-
-  if (explicitCount === operations.length) {
-    const specs: JobSpec[] = []
-    const assignedOperationIds = new Set<string>()
-    for (const job of computedJobs) {
-      const operationIdsForJob = operationsByExplicitJobId.get(job.id) ?? []
-      if (operationIdsForJob.length === 0) return null
-      for (const id of operationIdsForJob) assignedOperationIds.add(id)
-      specs.push({
-        id: job.id,
-        name: job.name,
-        operation_ids: operationIdsForJob,
-        path_anchor: job.pathAnchor,
-        cross_offset_from_artboard_bl: [
-          job.crossOffsetFromArtboardBL.x,
-          job.crossOffsetFromArtboardBL.y,
-        ],
-        is_big_spanner: job.isBigSpanner,
-      })
-    }
-    if (assignedOperationIds.size !== operations.length) return null
-    return specs
-  }
-
-  // Index every operation by its contributing node ids. `cutOrderGroupId` was
-  // set in `applyEditorCncMetadata` to `${artObjectId}::${editorGroupId}` — we
-  // flatten back to the set of editor nodeIds that composed the operation's
-  // elements (via the assignment records on each art object).
-  const nodeIdsByOperationId = new Map<string, Set<string>>()
-  const elementToNode = new Map<string, string>()
-  // Note: we lack a direct element→nodeId map in ArtObject. The `leafMeta`
-  // list built during `applyEditorCncMetadata` walks nodes in document order,
-  // which matches `Object.keys(elementAssignments)` order — so we can rebuild
-  // the mapping positionally here. This is the same positional correspondence
-  // that `applyEditorCncMetadata` already relies on.
-  for (const artObject of artObjects) {
-    const elementIds = Object.keys(artObject.elementAssignments)
-    // We don't have direct access to editor nodes from here; instead we lean on
-    // the operation list below. Elements contributing to each operation share a
-    // `cutOrderGroupId`, which carries a stable suffix we can decode.
-    for (const elementId of elementIds) {
-      const assignment = artObject.elementAssignments[elementId]
-      if (!assignment) continue
-      // `cutOrderGroupId` looks like "<artObjectId>::<editorGroupId>" OR just
-      // "<artObjectId>" for leaves that sat directly at the root. We don't have
-      // leaf nodeIds from the bridge side, so this map stays coarse — the job
-      // matcher below falls back on cutOrderIndex ranges.
-      elementToNode.set(elementId, assignment.cutOrderGroupId ?? artObject.id)
-    }
-  }
-
-  for (const operation of operations) {
-    const set = new Set<string>()
-    for (const elementId of operation.assigned_element_ids) {
-      const nodeMarker = elementToNode.get(elementId)
-      if (nodeMarker) set.add(nodeMarker)
-    }
-    nodeIdsByOperationId.set(operation.id, set)
-  }
-
-  // For each computed job, pick the operations whose any contributing
-  // cutOrderGroupId overlaps the job's nodeIds. We compare markers, so this
-  // only fires for jobs whose nodeIds show up as cutOrderGroupIds — root-level
-  // single-node leaves and manual-override jobs built from the layer tree.
-  const specs: JobSpec[] = []
-  const assignedOperationIds = new Set<string>()
+  const jobIdsKnown = new Set(computedJobs.map((job) => job.id))
+  const jobIdByNodeId = new Map<string, string>()
   for (const job of computedJobs) {
-    const operationIdsForJob: string[] = []
-    for (const operation of operations) {
-      if (assignedOperationIds.has(operation.id)) continue
-      const markers = nodeIdsByOperationId.get(operation.id) ?? new Set<string>()
-      const matches = job.nodeIds.some((nodeId) =>
-        Array.from(markers).some((marker) => marker.endsWith(`::${nodeId}`) || marker === nodeId),
-      )
-      if (matches) {
-        operationIdsForJob.push(operation.id)
-        assignedOperationIds.add(operation.id)
-      }
-    }
-    if (operationIdsForJob.length === 0) {
-      // One of the jobs has nothing to do — bail out rather than ship an empty
-      // job header. The backward-compat single-anchor path is safer.
-      return null
-    }
-    specs.push({
-      id: job.id,
-      name: job.name,
-      operation_ids: operationIdsForJob,
-      path_anchor: job.pathAnchor,
-      cross_offset_from_artboard_bl: [
-        job.crossOffsetFromArtboardBL.x,
-        job.crossOffsetFromArtboardBL.y,
-      ],
-      is_big_spanner: job.isBigSpanner,
-    })
+    for (const nodeId of job.nodeIds) jobIdByNodeId.set(nodeId, job.id)
   }
 
-  // Every operation must end up in exactly one job — otherwise Rust would
-  // silently drop cuts. When coverage isn't clean we bail back to single-job.
-  if (assignedOperationIds.size !== operations.length) return null
+  const resolveJobId = (operation: FrontendOperation): string => {
+    if (operation.jobId && jobIdsKnown.has(operation.jobId)) return operation.jobId
+    // Recovery path: inspect the operation's assigned element ids.
+    // `buildCompositeElementId` joins `<artObjectId>::<localElementId>`, and the
+    // artObjectId == the editor node id. If any assigned leaf maps to a job,
+    // claim that job.
+    for (const compositeId of operation.assigned_element_ids) {
+      const artObjectId = compositeId.split("::")[0]
+      if (!artObjectId) continue
+      const jobId = jobIdByNodeId.get(artObjectId)
+      if (jobId) return jobId
+    }
+    // Last-resort: dump it into the first job so generation proceeds.
+    console.warn(
+      `[bridgeAdapter] Operation ${operation.id} has no resolvable jobId; assigning to ${computedJobs[0]!.id}.`,
+    )
+    return computedJobs[0]!.id
+  }
 
-  return specs
+  const operationsByJobId = new Map<string, string[]>()
+  for (const operation of operations) {
+    const jobId = resolveJobId(operation)
+    const list = operationsByJobId.get(jobId) ?? []
+    list.push(operation.id)
+    operationsByJobId.set(jobId, list)
+  }
+
+  return computedJobs.map((job) => ({
+    id: job.id,
+    name: job.name,
+    operation_ids: operationsByJobId.get(job.id) ?? [],
+    path_anchor: job.pathAnchor,
+    cross_offset_from_artboard_bl: [
+      job.crossOffsetFromArtboardBL.x,
+      job.crossOffsetFromArtboardBL.y,
+    ],
+    is_big_spanner: job.isBigSpanner,
+  }))
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────

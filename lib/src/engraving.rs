@@ -147,6 +147,11 @@ pub struct EngravingOperation {
     pub fill_mode: Option<FillMode>,
     #[cfg_attr(feature = "serde", serde(default))]
     pub allow_thicken_routing: bool,
+    /// Minimum cut-order index for this operation, propagated from the
+    /// frontend. `None` means "unordered" — those operations fall through to
+    /// tie-break by input order.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cut_order_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

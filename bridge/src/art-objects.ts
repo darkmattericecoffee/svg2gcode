@@ -126,6 +126,7 @@ export function getDerivedOperationsForArtObjects(artObjects: ArtObject[]) {
     engrave_type: group.engraveType,
     fill_mode: group.fillMode,
     jobId: group.jobId,
+    cut_order_index: group.minCutOrderIndex ?? null,
   }));
 }
 

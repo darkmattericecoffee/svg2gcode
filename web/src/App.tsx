@@ -45,6 +45,7 @@ function App() {
   const previewShowStock = useEditorStore((state) => state.preview.showStock)
   const previewShowSvgOverlay = useEditorStore((state) => state.preview.showSvgOverlay)
   const previewShowRapidMoves = useEditorStore((state) => state.preview.showRapidMoves)
+  const previewShowJobOrder = useEditorStore((state) => state.preview.showJobOrder)
   const previewPlaybackRate = useEditorStore((state) => state.preview.playbackRate)
   const previewLoopPlayback = useEditorStore((state) => state.preview.loopPlayback)
   const setViewMode = useEditorStore((state) => state.setViewMode)
@@ -118,6 +119,7 @@ function App() {
           showStock: previewShowStock,
           showSvgOverlay: previewShowSvgOverlay,
           showRapidMoves: previewShowRapidMoves,
+          showJobOrder: previewShowJobOrder,
           playbackRate: previewPlaybackRate,
           loopPlayback: previewLoopPlayback,
         },
@@ -134,6 +136,7 @@ function App() {
     previewShowStock,
     previewShowSvgOverlay,
     previewShowRapidMoves,
+    previewShowJobOrder,
     previewPlaybackRate,
     previewLoopPlayback,
   ])
@@ -333,6 +336,19 @@ function App() {
       setViewMode(mode)
     }
   }, [gcode.result, initPreview, setViewMode])
+
+  // When the user flips the "show job order" toggle ON, jump into 3D so they
+  // can see it. Only fire on the false→true transition — otherwise this
+  // trampolines the user back to 3D every time they click "2D" while the
+  // toggle stays enabled.
+  const prevShowJobOrder = useRef(previewShowJobOrder)
+  useEffect(() => {
+    const wasOff = !prevShowJobOrder.current
+    prevShowJobOrder.current = previewShowJobOrder
+    if (wasOff && previewShowJobOrder && viewMode !== 'preview3d' && gcode.result) {
+      handleViewModeChange('preview3d')
+    }
+  }, [gcode.result, handleViewModeChange, previewShowJobOrder, viewMode])
 
   const isPreview3d = viewMode === 'preview3d'
   const isPreview2d = viewMode === 'preview2d'

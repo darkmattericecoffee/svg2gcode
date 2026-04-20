@@ -68,6 +68,11 @@ export interface OperationSpan {
   color: string | null;
   startDistance: number;
   endDistance: number;
+  /** Cut-order index as stamped into the `;operation:start:` marker by the
+   *  emitter. `null` when the marker is in the legacy two-field form or when
+   *  the frontend had no cut-order data for this operation. Spans are sorted
+   *  by this value (ascending) so the preview honours the frontend order. */
+  cutOrderIndex: number | null;
 }
 
 export interface ParsedProgram {
@@ -299,12 +304,28 @@ export function parseGcodeProgram(
     current = next;
   }
 
+  completeParsedJobs(jobs, segments);
+
+  // The emitter writes operations in cut-order already, so file order and
+  // cut-order agree for indexed spans. Sort explicitly so that consumers can
+  // trust `operationSpans` to match the frontend's cutOrder.ts output even
+  // if a future ingest path (hand-edited gcode, alternative emitters) feeds
+  // us indices out of order. Legacy spans without an index keep their input
+  // position via stable sort.
+  const operationSpans = buildOperationSpans(segments, operationRanges);
+  operationSpans.sort((a, b) => {
+    if (a.cutOrderIndex == null && b.cutOrderIndex == null) return 0;
+    if (a.cutOrderIndex == null) return 1;
+    if (b.cutOrderIndex == null) return -1;
+    return a.cutOrderIndex - b.cutOrderIndex;
+  });
+
   return {
     segments,
     bounds,
     totalDistance,
     events,
-    operationSpans: buildOperationSpans(segments, operationRanges),
+    operationSpans,
     previewOffset,
     jobs,
   };
@@ -317,14 +338,11 @@ export function parseGcodeProgram(
  *  is known. */
 function parseJobSpans(lines: string[]): JobSpan[] {
   const jobs: JobSpan[] = [];
-  const commentPattern = /^\s*;\s*/;
   const headerPattern = /^===\s*JOB\s+(\d+)\/(\d+)\s*:\s*(.*?)\s*===\s*$/;
 
   for (let i = 0; i < lines.length; i += 1) {
-    const raw = lines[i];
-    const commentMatch = raw.match(commentPattern);
-    if (!commentMatch) continue;
-    const comment = raw.slice(commentMatch[0].length);
+    const comment = commentText(lines[i]);
+    if (comment == null) continue;
     const header = comment.match(headerPattern);
     if (!header) continue;
 
@@ -336,15 +354,13 @@ function parseJobSpans(lines: string[]): JobSpan[] {
     let jobId = "";
     let bounds: JobSpan["bounds"] = null;
     let anchor: PathAnchor = "Center";
-    let crossOffsetFromArtboardBL = { x: 0, y: 0 };
-    let previewOffset = { x: 0, y: 0 };
+    let crossOffsetFromArtboardBL: { x: number; y: number } | null = null;
+    let previewOffset: { x: number; y: number } | null = null;
     let isBigSpanner = false;
 
     for (let k = i + 1; k < lines.length; k += 1) {
-      const kRaw = lines[k];
-      const kCommentMatch = kRaw.match(commentPattern);
-      if (!kCommentMatch) break;
-      const kComment = kRaw.slice(kCommentMatch[0].length).trim();
+      const kComment = commentText(lines[k]);
+      if (kComment == null) break;
 
       if (headerPattern.test(kComment)) break;
       const kv = kComment.match(/^([A-Z_][A-Z0-9_]*)\s*:\s*(.*)$/);
@@ -403,8 +419,8 @@ function parseJobSpans(lines: string[]): JobSpan[] {
       jobTotal,
       bounds,
       anchor,
-      crossOffsetFromArtboardBL,
-      previewOffset,
+      crossOffsetFromArtboardBL: crossOffsetFromArtboardBL ?? previewOffset ?? { x: 0, y: 0 },
+      previewOffset: previewOffset ?? crossOffsetFromArtboardBL ?? { x: 0, y: 0 },
       startLine,
       endLine: lines.length, // filled in by caller
       isBigSpanner,
@@ -416,10 +432,8 @@ function parseJobSpans(lines: string[]): JobSpan[] {
 
 function parsePreviewOffset(gcode: string): { x: number; y: number } {
   for (const rawLine of gcode.split(/\r?\n/)) {
-    const commentStart = rawLine.indexOf(";");
-    if (commentStart < 0) continue;
-
-    const comment = rawLine.slice(commentStart + 1).trim();
+    const comment = commentText(rawLine);
+    if (comment == null) continue;
     const match = comment.match(
       /^PREVIEW_OFFSET:\s*X\s+(-?\d+(?:\.\d+)?)(?:\s*,)?\s*Y\s+(-?\d+(?:\.\d+)?)/i,
     );
@@ -433,6 +447,63 @@ function parsePreviewOffset(gcode: string): { x: number; y: number } {
   }
 
   return { x: 0, y: 0 };
+}
+
+function completeParsedJobs(jobs: JobSpan[], segments: ParsedSegment[]): void {
+  if (jobs.length === 0 || segments.length === 0) return;
+
+  const segmentsByJob = new Map<string, ParsedSegment[]>();
+  for (const segment of segments) {
+    if (!segment.jobId) continue;
+    const list = segmentsByJob.get(segment.jobId) ?? [];
+    list.push(segment);
+    segmentsByJob.set(segment.jobId, list);
+  }
+
+  for (const job of jobs) {
+    if (job.bounds) continue;
+    const jobSegments = segmentsByJob.get(job.jobId);
+    if (!jobSegments || jobSegments.length === 0) continue;
+
+    const worldBounds = boundsFromSegments(jobSegments);
+    job.bounds = {
+      minX: worldBounds.minX - job.previewOffset.x,
+      minY: worldBounds.minY - job.previewOffset.y,
+      maxX: worldBounds.maxX - job.previewOffset.x,
+      maxY: worldBounds.maxY - job.previewOffset.y,
+    };
+  }
+}
+
+function boundsFromSegments(segments: ParsedSegment[]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+} {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const segment of segments) {
+    minX = Math.min(minX, segment.start.x, segment.end.x);
+    minY = Math.min(minY, segment.start.y, segment.end.y);
+    maxX = Math.max(maxX, segment.start.x, segment.end.x);
+    maxY = Math.max(maxY, segment.start.y, segment.end.y);
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+function commentText(rawLine: string): string | null {
+  const semicolonIndex = rawLine.indexOf(";");
+  if (semicolonIndex >= 0) {
+    return rawLine.slice(semicolonIndex + 1).trim();
+  }
+
+  const paren = rawLine.trim().match(/^\((.*)\)$/);
+  return paren ? paren[1]!.trim() : null;
 }
 
 export function sampleProgramAtDistance(
@@ -620,6 +691,7 @@ function buildOperationSpans(
         color: range.color,
         startDistance: matchingSegments[0].cumulativeDistanceStart,
         endDistance: matchingSegments.at(-1)!.cumulativeDistanceEnd,
+        cutOrderIndex: range.cut_order_index ?? null,
       },
     ];
   });

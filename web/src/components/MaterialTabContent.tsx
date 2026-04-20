@@ -530,11 +530,13 @@ export function PreviewTabContent() {
   const showSvgOverlay = useEditorStore((s) => s.preview.showSvgOverlay)
   const showRapidMoves = useEditorStore((s) => s.preview.showRapidMoves)
   const showCutOrder = useEditorStore((s) => s.preview.showCutOrder)
+  const showJobOrder = useEditorStore((s) => s.preview.showJobOrder)
   const setCameraType = useEditorStore((s) => s.setCameraType)
   const setShowStock = useEditorStore((s) => s.setShowStock)
   const setShowSvgOverlay = useEditorStore((s) => s.setShowSvgOverlay)
   const setShowRapidMoves = useEditorStore((s) => s.setShowRapidMoves)
   const setShowCutOrder = useEditorStore((s) => s.setShowCutOrder)
+  const setShowJobOrder = useEditorStore((s) => s.setShowJobOrder)
 
   return (
     <div className="space-y-5">
@@ -592,6 +594,15 @@ export function PreviewTabContent() {
               className="rounded border-border"
             />
             Show cut order badges + rapids
+          </label>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={showJobOrder}
+              onChange={(e) => setShowJobOrder(e.target.checked)}
+              className="rounded border-border"
+            />
+            Show job order and starting anchor
           </label>
         </div>
       </section>

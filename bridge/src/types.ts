@@ -152,6 +152,10 @@ export interface FrontendOperation {
   allow_thicken_routing?: boolean;
   /** Editor job id for multi-job output. Operations with different job ids stay separate. */
   jobId?: string;
+  /** Minimum cut-order index across the operation's contributing elements. Drives
+   *  deterministic operation ordering on the Rust side and is stamped into the
+   *  `;operation:start:…` marker so the parser can round-trip the order. */
+  cut_order_index?: number | null;
 }
 
 export interface ElementAssignment {
@@ -195,6 +199,9 @@ export interface OperationLineRange {
   color: string | null;
   start_line: number;
   end_line: number;
+  /** Cut-order index extracted from the `;operation:start:` marker. `null`
+   *  for legacy gcode that predates the index field. */
+  cut_order_index?: number | null;
 }
 
 export interface GenerateJobResponse {

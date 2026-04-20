@@ -11,6 +11,7 @@ interface PreviewPreferences {
   showStock?: boolean
   showSvgOverlay?: boolean
   showRapidMoves?: boolean
+  showJobOrder?: boolean
   playbackRate?: number
   loopPlayback?: boolean
 }
@@ -129,6 +130,7 @@ function sanitizePreview(value: unknown): PreviewPreferences | undefined {
   if (isBoolean(value.showStock)) next.showStock = value.showStock
   if (isBoolean(value.showSvgOverlay)) next.showSvgOverlay = value.showSvgOverlay
   if (isBoolean(value.showRapidMoves)) next.showRapidMoves = value.showRapidMoves
+  if (isBoolean(value.showJobOrder)) next.showJobOrder = value.showJobOrder
   if (isNumber(value.playbackRate) && value.playbackRate > 0) next.playbackRate = value.playbackRate
   if (isBoolean(value.loopPlayback)) next.loopPlayback = value.loopPlayback
   return Object.keys(next).length > 0 ? next : undefined
