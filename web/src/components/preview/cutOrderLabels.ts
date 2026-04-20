@@ -30,7 +30,7 @@ function hexFromNumberOrString(color: string | number | undefined, fallback = '#
   return fallback
 }
 
-function drawBadge(index: number, fillCss: string): HTMLCanvasElement {
+function drawBadge(label: string, fillCss: string): HTMLCanvasElement {
   const canvas = document.createElement('canvas')
   canvas.width = BADGE_SIZE_PX
   canvas.height = BADGE_SIZE_PX
@@ -49,8 +49,7 @@ function drawBadge(index: number, fillCss: string): HTMLCanvasElement {
   ctx.stroke()
 
   ctx.fillStyle = '#ffffff'
-  const label = String(index)
-  const fontSize = label.length >= 3 ? 48 : 64
+  const fontSize = label.length >= 5 ? 32 : label.length >= 3 ? 48 : 64
   ctx.font = `700 ${fontSize}px system-ui, -apple-system, sans-serif`
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -60,6 +59,10 @@ function drawBadge(index: number, fillCss: string): HTMLCanvasElement {
   ctx.fillText(label, cx, cy)
 
   return canvas
+}
+
+function jobHueCss(jobIndex: number): string {
+  return `hsl(${(jobIndex * 57) % 360}, 75%, 55%)`
 }
 
 export interface CutOrderLabel {
@@ -80,6 +83,14 @@ export function buildCutOrderLabels(
     ? createRapidMoveColorScale(allSegments)
     : null
 
+  const jobIdOrder: string[] = []
+  for (const s of allSegments) {
+    const jid = s.jobId ?? null
+    if (jid && !jobIdOrder.includes(jid)) jobIdOrder.push(jid)
+  }
+  const hasMultipleJobs = jobIdOrder.length > 1
+  const perJobCounter = new Map<string, number>()
+
   let visibleIndex = 0
   for (const tp of toolpaths) {
     // Anchor on the first segment that actually cuts material.
@@ -87,13 +98,24 @@ export function buildCutOrderLabels(
     if (!firstCut) continue
     visibleIndex += 1
 
+    const jobId = firstCut.jobId ?? null
+    const jobIndex = jobId ? jobIdOrder.indexOf(jobId) + 1 : 0
+    let labelText = String(visibleIndex)
+    if (hasMultipleJobs && jobIndex > 0) {
+      const next = (perJobCounter.get(jobId!) ?? 0) + 1
+      perJobCounter.set(jobId!, next)
+      labelText = `J${jobIndex}·${next}`
+    }
+
     const incomingRapidDistance = rapidColorScale
       ? incomingRapidDistanceForCut(firstCut, allSegments)
       : 0
-    const fill = rapidColorScale
-      ? rapidDistanceCssColor(incomingRapidDistance, rapidColorScale)
-      : hexFromNumberOrString(firstCut.operationColor ?? undefined)
-    const canvas = drawBadge(visibleIndex, fill)
+    const fill = hasMultipleJobs && jobIndex > 0
+      ? jobHueCss(jobIndex)
+      : rapidColorScale
+        ? rapidDistanceCssColor(incomingRapidDistance, rapidColorScale)
+        : hexFromNumberOrString(firstCut.operationColor ?? undefined)
+    const canvas = drawBadge(labelText, fill)
     const texture = new THREE.CanvasTexture(canvas)
     texture.anisotropy = 4
     texture.needsUpdate = true
@@ -111,6 +133,9 @@ export function buildCutOrderLabels(
     sprite.userData.seekDistance = firstCut.cumulativeDistanceStart
     sprite.userData.cutOrderIndex = visibleIndex
     sprite.userData.incomingRapidDistance = incomingRapidDistance
+    sprite.userData.jobId = jobId
+    sprite.userData.jobIndex = jobIndex
+    sprite.userData.labelText = labelText
 
     group.add(sprite)
     sprites.push(sprite)

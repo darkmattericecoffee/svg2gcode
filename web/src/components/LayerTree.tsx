@@ -6,6 +6,14 @@ import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
 import { depthToColor, isGeometricallyOpen, normalizeEngraveType } from '../lib/cncVisuals'
 import { computeCutOrder } from '../lib/cutOrder'
+import {
+  assignLeafIdsToJob,
+  computeJobs,
+  manualJobsFromComputed,
+  moveLeafToJob,
+  normalizeManualJobs,
+  splitManualJobsAtCutIndex,
+} from '../lib/jobs'
 import { boundsToViewBox, getNodePreviewBounds } from '../lib/nodeBounds'
 import { useEditorStore } from '../store'
 import { CutOrderView } from './CutOrderView'
@@ -364,9 +372,17 @@ export function LayerTree() {
   const defaultDepth = useEditorStore((s) => s.machiningSettings.defaultDepthMm)
   const cutOrderStrategy = useEditorStore((s) => s.machiningSettings.cutOrderStrategy)
   const manualCutOrder = useEditorStore((s) => s.machiningSettings.manualCutOrder)
+  const jobsEnabled = useEditorStore((s) => s.machiningSettings.jobsEnabled)
+  const manualJobs = useEditorStore((s) => s.machiningSettings.manualJobs)
+  const machiningSettings = useEditorStore((s) => s.machiningSettings)
+  const artboard = useEditorStore((s) => s.artboard)
+  const selectedJobId = useEditorStore((s) => s.selectedJobId)
+  const setSelectedJob = useEditorStore((s) => s.setSelectedJob)
+  const commitManualJobs = useEditorStore((s) => s.commitManualJobs)
   const setMachiningSettings = useEditorStore((s) => s.setMachiningSettings)
   const pushHistory = useEditorStore((s) => s.pushHistory)
-  const [view, setView] = useState<'layers' | 'cutOrder'>('layers')
+  const view = useEditorStore((s) => s.layerPanelView)
+  const setView = useEditorStore((s) => s.setLayerPanelView)
   const [query, setQuery] = useState('')
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const [lastClickedId, setLastClickedId] = useState<string | null>(null)
@@ -397,6 +413,86 @@ export function LayerTree() {
     () => computeCutOrder(rootIds, nodesById, cutOrderStrategy, manualCutOrder),
     [rootIds, nodesById, cutOrderStrategy, manualCutOrder],
   )
+
+  const computedJobResult = useMemo(
+    () => computeJobs(cutOrder, nodesById, machiningSettings, artboard),
+    [cutOrder, nodesById, machiningSettings, artboard],
+  )
+  const displayedJobs = jobsEnabled ? computedJobResult.jobs : []
+  const manualJobSeed = manualJobs ?? manualJobsFromComputed(computedJobResult.jobs)
+
+  /** Expand a selection of any node IDs into their descendant leaf IDs present
+   *  in the current cut order — job membership only tracks leaves. */
+  const selectedLeafIdsForJobs = useMemo(() => {
+    if (selectedIds.length === 0) return [] as string[]
+    const leafSet = new Set(cutOrder.sequence.map((l) => l.nodeId))
+    const out = new Set<string>()
+    const visit = (id: string) => {
+      if (leafSet.has(id)) out.add(id)
+      const node = nodesById[id]
+      if (node?.type === 'group') for (const c of node.childIds) visit(c)
+    }
+    for (const id of selectedIds) visit(id)
+    return [...out]
+  }, [selectedIds, cutOrder, nodesById])
+
+  const assignSelectionToJob = (targetJobId: string | 'new') => {
+    if (!jobsEnabled || selectedLeafIdsForJobs.length === 0) return
+    const nextJobs = assignLeafIdsToJob(cutOrder, manualJobSeed, selectedLeafIdsForJobs, targetJobId)
+    commitManualJobs(nextJobs)
+    if (targetJobId !== 'new') {
+      setSelectedJob(targetJobId)
+      return
+    }
+    const selectedSet = new Set(selectedLeafIdsForJobs)
+    const newJob = nextJobs.find(
+      (job) => job.nodeIds.length === selectedSet.size && job.nodeIds.every((nodeId) => selectedSet.has(nodeId)),
+    )
+    setSelectedJob(newJob?.id ?? null)
+  }
+
+  const startJobAt = (cutIndex: number) => {
+    if (!jobsEnabled) return
+    const nextJobs = splitManualJobsAtCutIndex(cutOrder, manualJobSeed, cutIndex)
+    commitManualJobs(nextJobs)
+    const nodeAtMarker = cutOrder.sequence[cutIndex]?.nodeId
+    const nextJob = nodeAtMarker ? nextJobs.find((job) => job.nodeIds.includes(nodeAtMarker)) : null
+    setSelectedJob(nextJob?.id ?? null)
+  }
+
+  const handleCutOrderReorder = (nextOrder: string[]) => {
+    const leavesById = new Map(cutOrder.sequence.map((leaf) => [leaf.nodeId, leaf]))
+    const nextCutOrder = {
+      ...cutOrder,
+      sequence: nextOrder
+        .map((nodeId, index) => {
+          const leaf = leavesById.get(nodeId)
+          return leaf ? { ...leaf, index } : null
+        })
+        .filter((leaf): leaf is typeof cutOrder.sequence[number] => Boolean(leaf)),
+    }
+    setMachiningSettings({
+      cutOrderStrategy: 'manual',
+      manualCutOrder: nextOrder,
+      ...(jobsEnabled ? { manualJobs: normalizeManualJobs(nextCutOrder, manualJobSeed) } : {}),
+    })
+  }
+
+  const handleMoveToJob = (
+    nodeId: string,
+    targetJobId: string,
+    targetNodeId: string,
+    before: boolean,
+  ) => {
+    if (!jobsEnabled) return
+    const result = moveLeafToJob(cutOrder, manualJobSeed, nodeId, targetJobId, targetNodeId, before)
+    setMachiningSettings({
+      cutOrderStrategy: 'manual',
+      manualCutOrder: result.manualCutOrder,
+      manualJobs: result.manualJobs,
+    })
+    setSelectedJob(targetJobId)
+  }
 
   useEffect(() => {
     const onMouseUp = () => setIsDragging(false)
@@ -520,6 +616,15 @@ export function LayerTree() {
         x={contextMenu.x}
         y={contextMenu.y}
         showRename
+        jobActions={view === 'cutOrder' && jobsEnabled ? {
+          jobs: displayedJobs.map((job, index) => ({
+            id: job.id,
+            label: `Job ${index + 1}`,
+            name: job.name,
+          })),
+          canAssign: selectedLeafIdsForJobs.length > 0,
+          onAddToJob: assignSelectionToJob,
+        } : undefined}
         onRename={() => {
           const node = contextMenu.nodeId ? nodesById[contextMenu.nodeId] : null
           if (node) handleStartRename(node)
@@ -577,6 +682,42 @@ export function LayerTree() {
               Dragging made this a custom order. Pick a preset to rebuild it.
             </p>
           )}
+          {jobsEnabled && selectedLeafIdsForJobs.length > 0 && (
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[11px] text-muted-foreground">
+                {selectedLeafIdsForJobs.length} selected →
+              </span>
+              <select
+                className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) assignSelectionToJob(e.target.value)
+                  e.target.value = ''
+                }}
+              >
+                <option value="" disabled>
+                  Assign to job…
+                </option>
+                <option value="new">＋ New job</option>
+                {displayedJobs.map((j, i) => (
+                  <option key={j.id} value={j.id}>
+                    Job {i + 1} — {j.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {jobsEnabled && manualJobs !== null && (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                onClick={() => commitManualJobs(null)}
+              >
+                Reset jobs to auto
+              </button>
+            </div>
+          )}
         </div>
       ) : (
       <div className="border-b border-border px-4 py-3">
@@ -614,19 +755,67 @@ export function LayerTree() {
           nodesById={nodesById}
           selectedIds={selectedIds}
           defaultDepth={defaultDepth}
+          jobs={displayedJobs}
           onSelect={(id, e) => handleCutOrderRowSelect(id, e)}
           onHover={handleRowMouseEnter}
           onHoverLeave={handleRowMouseLeave}
           onContextMenu={handleRowContextMenu}
-          onReorder={(nextOrder) =>
-            setMachiningSettings({
-              cutOrderStrategy: 'manual',
-              manualCutOrder: nextOrder,
-            })
-          }
+          onStartJobAt={startJobAt}
+          onMoveToJob={handleMoveToJob}
+          onReorder={handleCutOrderReorder}
         />
       ) : (
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {/* Jobs tier — shown only when the user has pinned a manual partition
+            with >1 job. Auto-derived jobs live in the preview/canvas for now
+            because they depend on cutOrder + node bounds that this tree
+            doesn't currently memoise. Clicking a job routes the anchor
+            picker to that job via `selectedJobId`. */}
+        {jobsEnabled && manualJobs && manualJobs.length > 1 ? (
+          <div className="mb-3 rounded-lg border border-border bg-[var(--surface)] p-2">
+            <div className="flex items-center justify-between px-1 pb-2">
+              <p className="text-xs font-semibold text-foreground">Jobs</p>
+              <button
+                type="button"
+                className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                onClick={() => commitManualJobs(null)}
+              >
+                Reset to auto
+              </button>
+            </div>
+            <div className="space-y-1">
+              {manualJobs.map((job, i) => {
+                const active = selectedJobId === job.id
+                return (
+                  <button
+                    key={job.id}
+                    type="button"
+                    className={cn(
+                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors',
+                      active
+                        ? 'bg-[var(--surface-tertiary)] text-foreground'
+                        : 'text-muted-foreground hover:bg-[var(--surface-secondary)]',
+                    )}
+                    onClick={() => setSelectedJob(active ? null : job.id)}
+                  >
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      J{i + 1}
+                    </span>
+                    <span className="flex-1 truncate">{job.name}</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {job.nodeIds.length} item{job.nodeIds.length === 1 ? '' : 's'}
+                    </span>
+                    {job.forceOwnJob ? (
+                      <span className="rounded bg-[var(--surface-secondary)] px-1 text-[10px]">
+                        solo
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ) : null}
         {filteredRootIds.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-[var(--surface)] px-3 py-3 text-sm text-muted-foreground">
             {rootIds.length === 0

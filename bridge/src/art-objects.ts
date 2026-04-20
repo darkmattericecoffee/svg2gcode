@@ -125,6 +125,7 @@ export function getDerivedOperationsForArtObjects(artObjects: ArtObject[]) {
     color: group.color,
     engrave_type: group.engraveType,
     fill_mode: group.fillMode,
+    jobId: group.jobId,
   }));
 }
 

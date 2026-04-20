@@ -18,6 +18,7 @@ import type {
   GroupNode,
   ImportStatus,
   InteractionMode,
+  Job,
   MachiningSettings,
   MarqueeRect,
   PathAnchor,
@@ -77,10 +78,22 @@ export interface EditorStore {
   nodeVersion: number
   hoveredId: string | null
   hoveredPathAnchor: PathAnchor | null
+  /** Currently-focused job for the inspector's per-job anchor picker. */
+  selectedJobId: string | null
+  /** Which tab of the layer panel is active. Canvas reads this to gate the
+   *  job overlays (they only render on the Cut Order tab). */
+  layerPanelView: 'layers' | 'cutOrder'
+  setLayerPanelView: (view: 'layers' | 'cutOrder') => void
   eyedropperMode: EyedropperMode
   eyedropperSourceNodeId: string | null
   setHoveredId: (id: string | null) => void
   setHoveredPathAnchor: (anchor: PathAnchor | null) => void
+  setSelectedJob: (id: string | null) => void
+  /** Patch a single job inside `manualJobs`. If no manual override exists yet,
+   *  `seedFromAuto` must supply the current auto-derived partition to pin. */
+  updateJob: (id: string, patch: Partial<Job>, seedFromAuto?: Job[]) => void
+  /** Replace the entire manual partition. Pass `null` to revert to auto. */
+  commitManualJobs: (jobs: Job[] | null) => void
   setEyedropperMode: (mode: EyedropperMode) => void
   applyEyedropperPick: (clickedNodeId: string) => void
   setInteractionMode: (mode: InteractionMode) => void
@@ -624,6 +637,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     circularInterpolation: true,
     cutOrderStrategy: 'ltr',
     manualCutOrder: null,
+    jobsEnabled: true,
+    jobClusterRadius: null,
+    manualJobs: null,
   },
   viewport: initialViewport,
   ui: {
@@ -638,11 +654,32 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   nodeVersion: 0,
   hoveredId: null,
   hoveredPathAnchor: null,
+  selectedJobId: null,
+  layerPanelView: 'layers',
   eyedropperMode: 'off',
   eyedropperSourceNodeId: null,
   leftPanelTab: 'layers',
   setHoveredId: (id) => set({ hoveredId: id }),
   setHoveredPathAnchor: (anchor) => set({ hoveredPathAnchor: anchor }),
+  setSelectedJob: (id) => set({ selectedJobId: id }),
+  setLayerPanelView: (view) => set({ layerPanelView: view }),
+  commitManualJobs: (jobs) => {
+    set((state) => ({
+      machiningSettings: { ...state.machiningSettings, manualJobs: jobs },
+      // Drop the stale selection when the partition is reset.
+      selectedJobId: jobs == null ? null : state.selectedJobId,
+    }))
+  },
+  updateJob: (id, patch, seedFromAuto) => {
+    set((state) => {
+      const base = state.machiningSettings.manualJobs ?? seedFromAuto ?? null
+      if (!base) return {}
+      const next = base.map((j) => (j.id === id ? { ...j, ...patch } : j))
+      return {
+        machiningSettings: { ...state.machiningSettings, manualJobs: next },
+      }
+    })
+  },
   setEyedropperMode: (mode) => set({
     eyedropperMode: mode,
     eyedropperSourceNodeId: null,

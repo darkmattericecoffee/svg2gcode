@@ -65,10 +65,32 @@ export function MaterialTabContent({ materialPreset, onMaterialChange }: Materia
   const setMachiningSettings = useEditorStore((s) => s.setMachiningSettings)
   const setHoveredPathAnchor = useEditorStore((s) => s.setHoveredPathAnchor)
   const nodesById = useEditorStore((s) => s.nodesById)
+  const selectedJobId = useEditorStore((s) => s.selectedJobId)
+  const setSelectedJob = useEditorStore((s) => s.setSelectedJob)
+  const updateJob = useEditorStore((s) => s.updateJob)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [stepoverFlash, setStepoverFlash] = useState(false)
 
   const setField = (patch: Partial<MachiningSettings>) => setMachiningSettings(patch)
+
+  // Look up the pinned manual entry for the selected job (if any). Auto-
+  // derived jobs aren't surfaced here yet — scaffolding only wires the
+  // path where the user has already committed manual overrides.
+  const selectedJobEntry =
+    selectedJobId != null
+      ? machiningSettings.manualJobs?.find((j) => j.id === selectedJobId) ?? null
+      : null
+  const anchorLabel = selectedJobEntry
+    ? `Anchor for: ${selectedJobEntry.name}`
+    : 'Anchor for: whole file'
+  const effectiveAnchor = selectedJobEntry?.pathAnchor ?? machiningSettings.pathAnchor
+  const setEffectiveAnchor = (next: PathAnchor) => {
+    if (selectedJobEntry) {
+      updateJob(selectedJobEntry.id, { pathAnchor: next })
+    } else {
+      setField({ pathAnchor: next })
+    }
+  }
 
   const maxCutDepth = Object.values(nodesById).reduce<number>((max, node) => {
     const d = node.cncMetadata?.cutDepth
@@ -243,14 +265,58 @@ export function MaterialTabContent({ materialPreset, onMaterialChange }: Materia
       {/* Work anchor */}
       <section className="space-y-3">
         <SectionHeading title="Work anchor" />
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">{anchorLabel}</p>
+          {selectedJobEntry ? (
+            <button
+              type="button"
+              className="text-xs text-primary underline-offset-2 hover:underline"
+              onClick={() => setSelectedJob(null)}
+            >
+              Edit whole-file default
+            </button>
+          ) : null}
+        </div>
         <PathAnchorPicker
-          value={machiningSettings.pathAnchor}
-          onChange={(pathAnchor) => setField({ pathAnchor })}
+          value={effectiveAnchor}
+          onChange={setEffectiveAnchor}
           onPreview={setHoveredPathAnchor}
         />
         <p className="text-xs text-muted-foreground">
           This point in the generated cut bounds becomes machine 0,0. Bottom left keeps today&apos;s output.
         </p>
+      </section>
+
+      {/* Jobs — split the program into rezero checkpoints. */}
+      <section className="space-y-3">
+        <SectionHeading title="Jobs" />
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={machiningSettings.jobsEnabled}
+            onChange={(e) => setField({ jobsEnabled: e.target.checked })}
+            className="rounded border-border"
+          />
+          Split into jobs with rezero pauses
+        </label>
+        <p className="text-xs text-muted-foreground">
+          On handheld CNCs, long travel drifts. Job boundaries pause the machine (M0) so you can realign the router at a pencil cross and rezero.
+        </p>
+        {machiningSettings.jobsEnabled && (
+          <div className="space-y-2">
+            <NumberField
+              label="Cluster radius"
+              unit="mm"
+              value={machiningSettings.jobClusterRadius}
+              onChange={(v) =>
+                setField({ jobClusterRadius: v != null && v > 0 ? v : null })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Leaves whose centroids are within this distance cluster into the same job. Leave blank for an artboard-scaled default.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Feed speed */}

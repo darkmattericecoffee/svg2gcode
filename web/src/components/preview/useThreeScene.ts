@@ -26,6 +26,7 @@ export interface SceneState {
   overlayGroup: THREE.Group
   toolMarkerGroup: THREE.Group
   cutOrderGroup: THREE.Group
+  jobsGroup: THREE.Group
 }
 
 export function useThreeScene(
@@ -148,8 +149,9 @@ export function useThreeScene(
     const overlayGroup = new THREE.Group()
     const toolMarkerGroup = new THREE.Group()
     const cutOrderGroup = new THREE.Group()
+    const jobsGroup = new THREE.Group()
 
-    scene.add(lightGroup, gridGroup, stockGroup, sweepGroup, toolpathGroup, overlayGroup, toolMarkerGroup, cutOrderGroup)
+    scene.add(lightGroup, gridGroup, stockGroup, sweepGroup, toolpathGroup, overlayGroup, toolMarkerGroup, cutOrderGroup, jobsGroup)
 
     const state: SceneState = {
       renderer,
@@ -166,6 +168,7 @@ export function useThreeScene(
       overlayGroup,
       toolMarkerGroup,
       cutOrderGroup,
+      jobsGroup,
     }
     sceneRef.current = state
 
@@ -220,6 +223,7 @@ export function useThreeScene(
       clearGroup(overlayGroup)
       clearGroup(toolMarkerGroup)
       clearGroup(cutOrderGroup)
+      clearGroup(jobsGroup)
 
       // Safety net: anything still parented directly to the scene.
       scene.traverse((node) => {

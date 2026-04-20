@@ -20,6 +20,8 @@ import {
 import { resizeGeneratorToBounds, supportsGeneratorResizeBack } from './lib/generators'
 import { getNodeSize } from './lib/nodeDimensions'
 import { getNodePreviewBounds, type Bounds } from './lib/nodeBounds'
+import { computeJobs, type ComputedJob } from './lib/jobs'
+import { computeCutOrder } from './lib/cutOrder'
 import { getBoundsForNodes, getGuides, getLineGuideStops } from './lib/objectSnapping'
 import { getNodeTransformPatch } from './lib/transformUtils'
 import { generateCenterlineForNode } from './lib/centerline'
@@ -1527,6 +1529,30 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
       point: anchorPointFromCanvasBounds(hoveredPathAnchor, bounds),
     }
   }, [hoveredPathAnchor, nodesById, rootIds])
+
+  const jobsEnabled = useEditorStore((s) => s.machiningSettings.jobsEnabled)
+  const machiningSettings = useEditorStore((s) => s.machiningSettings)
+  const storeArtboard = useEditorStore((s) => s.artboard)
+  const selectedJobId = useEditorStore((s) => s.selectedJobId)
+  const setSelectedJob = useEditorStore((s) => s.setSelectedJob)
+  const layerPanelView = useEditorStore((s) => s.layerPanelView)
+  const computedJobs = useMemo<ComputedJob[]>(() => {
+    if (!jobsEnabled) return []
+    // Overlays are editing affordances tied to the Cut Order tab — don't
+    // clutter the canvas while the user is on the Layers tab.
+    if (layerPanelView !== 'cutOrder') return []
+    const cutOrder = computeCutOrder(
+      rootIds,
+      nodesById,
+      machiningSettings.cutOrderStrategy,
+      machiningSettings.manualCutOrder,
+    )
+    const { jobs } = computeJobs(cutOrder, nodesById, machiningSettings, storeArtboard)
+    // Draw overlay only when splitting actually produced multiple jobs —
+    // a single job is just "whole file" and the existing anchor preview
+    // already covers that case.
+    return jobs.length > 1 ? jobs : []
+  }, [jobsEnabled, layerPanelView, machiningSettings, nodesById, rootIds, storeArtboard])
   const outlineSourceIds = useMemo(
     () => [
       ...new Set([
@@ -1955,6 +1981,115 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
               })}
 
             {centerlineOverlayNodes}
+
+            {/* Per-job overlay: dashed bounds rectangle + crosshair at each
+                job's anchor + dashed offset guides to the artboard's left and
+                bottom edges. Clicking a job routes the inspector's anchor
+                picker to that job via `selectedJobId`. The per-job palette
+                is a simple deterministic hue so colour-coding matches 3D
+                preview badges. */}
+            {computedJobs.length > 1
+              ? computedJobs.map((job, jobIndex) => {
+                  const { boundsMm, anchorPointMm } = job
+                  const hue = (jobIndex * 57) % 360
+                  const strokeColor = `hsl(${hue}, 75%, 55%)`
+                  const fillColor = `hsla(${hue}, 75%, 55%, 0.06)`
+                  const arm = 10 / viewport.scale
+                  const strokeWidth = 1.2 / viewport.scale
+                  const active = selectedJobId === job.id
+                  const artboardLeft = 0
+                  const artboardBottom = storeArtboard.height
+                  return (
+                    <Group
+                      key={`job-overlay-${job.id}`}
+                      onClick={(e) => {
+                        e.cancelBubble = true
+                        setSelectedJob(active ? null : job.id)
+                      }}
+                    >
+                      <Rect
+                        x={boundsMm.minX}
+                        y={boundsMm.minY}
+                        width={boundsMm.maxX - boundsMm.minX}
+                        height={boundsMm.maxY - boundsMm.minY}
+                        stroke={strokeColor}
+                        strokeWidth={(active ? 1.8 : 0.9) / viewport.scale}
+                        dash={[6 / viewport.scale, 4 / viewport.scale]}
+                        fill={fillColor}
+                      />
+                      {/* Offset guide — horizontal, crosshair → artboard left edge. */}
+                      <Line
+                        points={[
+                          artboardLeft,
+                          anchorPointMm.y,
+                          anchorPointMm.x,
+                          anchorPointMm.y,
+                        ]}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                        dash={[3 / viewport.scale, 3 / viewport.scale]}
+                      />
+                      {/* Offset guide — vertical, crosshair → artboard bottom edge. */}
+                      <Line
+                        points={[
+                          anchorPointMm.x,
+                          anchorPointMm.y,
+                          anchorPointMm.x,
+                          artboardBottom,
+                        ]}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                        dash={[3 / viewport.scale, 3 / viewport.scale]}
+                      />
+                      {/* Crosshair at anchor. */}
+                      <Line
+                        points={[
+                          anchorPointMm.x - arm,
+                          anchorPointMm.y,
+                          anchorPointMm.x + arm,
+                          anchorPointMm.y,
+                        ]}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth * 1.2}
+                        lineCap="round"
+                      />
+                      <Line
+                        points={[
+                          anchorPointMm.x,
+                          anchorPointMm.y - arm,
+                          anchorPointMm.x,
+                          anchorPointMm.y + arm,
+                        ]}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth * 1.2}
+                        lineCap="round"
+                      />
+                      <Text
+                        x={anchorPointMm.x + arm}
+                        y={anchorPointMm.y - arm - 14 / viewport.scale}
+                        text={`J${jobIndex + 1}`}
+                        fontSize={11 / viewport.scale}
+                        fill={strokeColor}
+                        fontStyle="bold"
+                      />
+                      <Text
+                        x={artboardLeft + 2 / viewport.scale}
+                        y={anchorPointMm.y - 14 / viewport.scale}
+                        text={`${job.crossOffsetFromArtboardBL.x.toFixed(1)} mm`}
+                        fontSize={10 / viewport.scale}
+                        fill={strokeColor}
+                      />
+                      <Text
+                        x={anchorPointMm.x + 4 / viewport.scale}
+                        y={artboardBottom - 14 / viewport.scale}
+                        text={`${job.crossOffsetFromArtboardBL.y.toFixed(1)} mm`}
+                        fontSize={10 / viewport.scale}
+                        fill={strokeColor}
+                      />
+                    </Group>
+                  )
+                })
+              : null}
 
             {hoveredPathAnchorPreview ? (() => {
               const { bounds, point } = hoveredPathAnchorPreview

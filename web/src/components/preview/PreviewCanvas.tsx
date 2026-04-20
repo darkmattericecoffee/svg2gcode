@@ -10,6 +10,7 @@ import { createStockMeshLayers, createStockMaterialHandle, type StockMaterialHan
 import { createMergedSweepMeshes } from './sweepMesh'
 import { buildToolpathLines, updateDrawRange, type ToolpathLineData } from './toolpathLines'
 import { buildCutOrderLabels, disposeCutOrderLabels } from './cutOrderLabels'
+import { buildJobOverlays, disposeJobOverlays } from './jobOverlays'
 import type { ToolMarker } from './sceneHelpers'
 
 export function PreviewCanvas() {
@@ -31,6 +32,8 @@ export function PreviewCanvas() {
 
   const isPlaying = useEditorStore((s) => s.preview.isPlaying)
   const playbackDistance = useEditorStore((s) => s.preview.playbackDistance)
+
+  const [realignJob, setRealignJob] = useState<{ index: number; total: number; name: string; crossX: number; crossY: number; bigSpanner: boolean } | null>(null)
 
   const [stockTexture, setStockTexture] = useState<THREE.Texture | null>(null)
 
@@ -259,6 +262,49 @@ export function PreviewCanvas() {
     }
   }, [sceneRef, toolpaths, parsedProgram, showCutOrder, requestRender])
 
+  // Build per-job overlays (dashed bounds + crosshair + label) in the 3D scene.
+  useEffect(() => {
+    const state = sceneRef.current
+    if (!state) return
+    disposeJobOverlays(state.jobsGroup)
+    const jobs = parsedProgram?.jobs ?? []
+    if (jobs.length > 1) {
+      const overlay = buildJobOverlays(jobs)
+      for (const child of [...overlay.children]) state.jobsGroup.add(child)
+    }
+    requestRender()
+    return () => {
+      disposeJobOverlays(state.jobsGroup)
+    }
+  }, [sceneRef, parsedProgram, requestRender])
+
+  // Detect job_stop events and surface the realign overlay card.
+  useEffect(() => {
+    if (!parsedProgram) { setRealignJob(null); return }
+    const events = parsedProgram.events ?? []
+    const stop = [...events].reverse().find(
+      (e) => e.kind === 'job_stop' && e.distance <= playbackDistance + 0.001,
+    )
+    if (!stop) { setRealignJob(null); return }
+    const nextJobId = (stop as { nextJobId?: string | null }).nextJobId ?? null
+    const jobs = parsedProgram.jobs ?? []
+    const nextJob = nextJobId ? jobs.find((j) => j.jobId === nextJobId) : null
+    if (!nextJob) { setRealignJob(null); return }
+    // Dismiss once we've advanced past the next job's first cut.
+    if (playbackDistance > stop.distance + 0.5) {
+      // Still keep it visible while paused — dismiss only when playback clearly
+      // advances into the next job's geometry.
+    }
+    setRealignJob({
+      index: nextJob.jobIndex,
+      total: nextJob.jobTotal,
+      name: nextJob.jobName,
+      crossX: nextJob.crossOffsetFromArtboardBL.x,
+      crossY: nextJob.crossOffsetFromArtboardBL.y,
+      bigSpanner: nextJob.isBigSpanner,
+    })
+  }, [parsedProgram, playbackDistance])
+
   // Click-to-seek on cut-order badges. Raycast from the pointer into the
   // cutOrderGroup; on a hit, jump playback to that cut's start distance.
   useEffect(() => {
@@ -365,5 +411,36 @@ export function PreviewCanvas() {
     }
   }, [isPlaying])
 
-  return <div ref={containerRef} className="h-full w-full" />
+  return (
+    <div ref={containerRef} className="h-full w-full relative">
+      {realignJob && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 pointer-events-auto bg-black/80 text-white rounded-md px-4 py-3 shadow-lg text-sm max-w-md">
+          <div className="font-semibold mb-1">
+            Realign router — Job {realignJob.index} of {realignJob.total}: {realignJob.name}
+          </div>
+          <div className="mb-1">
+            Mark a pencil cross on your stock at{' '}
+            <span className="font-mono">
+              X {realignJob.crossX.toFixed(1)} mm from the left edge, Y{' '}
+              {realignJob.crossY.toFixed(1)} mm from the bottom edge
+            </span>
+            . Align the baseplate center to the cross, zero the router, then press
+            Continue.
+          </div>
+          {realignJob.bigSpanner && (
+            <div className="text-amber-300 text-xs">
+              ⚠ This job cuts an outline that encompasses others — check stock
+              orientation before continuing.
+            </div>
+          )}
+          <button
+            onClick={() => setRealignJob(null)}
+            className="mt-2 px-3 py-1 bg-white text-black rounded text-xs font-medium"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </div>
+  )
 }

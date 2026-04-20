@@ -8,9 +8,11 @@ export function getAssignmentProfileKey(
   fillMode: FillMode | null,
   engraveType: ElementAssignment["engraveType"],
   cutOrderGroupId?: string,
+  jobId?: string,
 ) {
   const groupPart = cutOrderGroupId ?? "default";
-  return `${groupPart}::${targetDepthMm}::${engraveType ?? "default"}::${fillMode ?? "default"}`;
+  const jobPart = jobId ?? "default";
+  return `${jobPart}::${groupPart}::${targetDepthMm}::${engraveType ?? "default"}::${fillMode ?? "default"}`;
 }
 
 export function groupAssignmentsForIds(
@@ -26,6 +28,7 @@ export function groupAssignmentsForIds(
       elementIds: string[];
       cutOrderGroupId?: string;
       minCutOrderIndex?: number;
+      jobId?: string;
     }
   >();
 
@@ -38,7 +41,8 @@ export function groupAssignmentsForIds(
     const engraveType = assignment.engraveType ?? fillModeToEngraveType(assignment.fillMode);
     const fillMode = assignment.fillMode ?? engraveTypeToFillMode(engraveType);
     const cutOrderGroupId = assignment.cutOrderGroupId;
-    const key = getAssignmentProfileKey(assignment.targetDepthMm, fillMode, engraveType, cutOrderGroupId);
+    const jobId = assignment.jobId;
+    const key = getAssignmentProfileKey(assignment.targetDepthMm, fillMode, engraveType, cutOrderGroupId, jobId);
     const existing = groups.get(key);
     if (existing) {
       existing.elementIds.push(elementId);
@@ -55,6 +59,7 @@ export function groupAssignmentsForIds(
         elementIds: [elementId],
         cutOrderGroupId,
         minCutOrderIndex: assignment.cutOrderIndex,
+        jobId,
       });
     }
   }
@@ -69,6 +74,7 @@ export function groupAssignmentsForIds(
       color: colorForOperation(index),
       cutOrderGroupId: group.cutOrderGroupId,
       minCutOrderIndex: group.minCutOrderIndex,
+      jobId: group.jobId,
     }))
     .sort((left, right) => {
       // When cut-order data is present, honour it first — this is what preserves
@@ -99,5 +105,6 @@ export function deriveOperationsFromProfileGroups(groups: AssignmentProfileGroup
     color: group.color,
     engrave_type: group.engraveType,
     fill_mode: group.fillMode,
+    jobId: group.jobId,
   }));
 }

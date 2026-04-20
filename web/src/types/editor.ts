@@ -57,6 +57,28 @@ export interface MachiningSettings {
   cutOrderStrategy: 'svg' | 'ltr' | 'btt' | 'manual'
   /** Explicit cut-order override (list of leaf nodeIds) used when strategy === 'manual'. */
   manualCutOrder: string[] | null
+  /** Split the program into multiple handheld-CNC "jobs" — each job pauses the
+   *  machine before resuming so the user can physically reposition and rezero
+   *  the router. Disabling produces a single contiguous program (legacy output). */
+  jobsEnabled: boolean
+  /** Centroid proximity (mm) for auto-clustering leaves into the same job.
+   *  `null` defaults to `clamp(max(artboard.w, artboard.h) * 0.15, 40, 200)`. */
+  jobClusterRadius: number | null
+  /** User-pinned job partition. When non-null, wins over the auto-derived one. */
+  manualJobs: Job[] | null
+}
+
+export interface Job {
+  /** Stable id (nanoid). */
+  id: string
+  /** Display name. Defaults to "Job N" but is editable. */
+  name: string
+  /** Leaves owned by this job, in cut order. */
+  nodeIds: string[]
+  /** Per-job anchor — defaults to `Center`, overrideable in the inspector. */
+  pathAnchor: PathAnchor
+  /** User-tagged "this is a passe-partout / frame — keep it in its own job". */
+  forceOwnJob: boolean
 }
 
 export interface ViewportState {

@@ -1,6 +1,9 @@
 use std::{borrow::Cow, collections::BTreeMap};
 
-use g_code::{command, emit::Token};
+use g_code::{
+    command,
+    emit::{Field, Token, Value},
+};
 use i_overlay::{
     core::fill_rule::FillRule as OverlayFillRule,
     float::simplify::SimplifyShape,
@@ -20,7 +23,7 @@ use uom::si::{
     length::{inch, millimeter},
 };
 
-use super::{ConversionConfig, ConversionOptions, ConversionVisitor, PathAnchor, visit};
+use super::{ConversionConfig, ConversionOptions, ConversionVisitor, JobSpec, PathAnchor, visit};
 use crate::{
     EngravingConfig, EngravingOperation, FillMode, GenerationWarning, Machine, Turtle,
     arc::{ArcOrLineSegment, FlattenWithArcs},
@@ -1468,6 +1471,142 @@ fn anchor_point_for_bounds(anchor: PathAnchor, bounds: Option<(f64, f64, f64, f6
     Point::new(x, y)
 }
 
+/// Group scheduled operation groups into their owning jobs, preserving the
+/// incoming order of the `scheduled_groups` slice. Returns `None` when
+/// there is no job plan, when the plan would leave cuts un-assigned, or
+/// when the plan references ids that don't exist in the schedule —
+/// caller should fall back to the single-anchor legacy path rather than
+/// silently drop geometry.
+fn partition_scheduled_groups_by_job<'a>(
+    scheduled_groups: &[ScheduledOperationGroup],
+    jobs: Option<&'a [JobSpec]>,
+) -> Option<Vec<(&'a JobSpec, Vec<usize>)>> {
+    let jobs = jobs?;
+    if jobs.is_empty() {
+        return None;
+    }
+
+    // Map operation_id → job_index. If the same operation is claimed by
+    // two jobs, the first wins; the caller shouldn't construct that
+    // case, but we guard against it so we never double-emit a cut.
+    let mut op_to_job = BTreeMap::<&str, usize>::new();
+    for (job_index, job) in jobs.iter().enumerate() {
+        for op_id in &job.operation_ids {
+            op_to_job.entry(op_id.as_str()).or_insert(job_index);
+        }
+    }
+
+    let mut buckets: Vec<Vec<usize>> = (0..jobs.len()).map(|_| Vec::new()).collect();
+    for (i, scheduled) in scheduled_groups.iter().enumerate() {
+        // Thickened operations carry an `-thickened` suffix — strip it so
+        // both halves land in the same job as the originating operation.
+        let lookup_id = scheduled
+            .operation_id
+            .strip_suffix("-thickened")
+            .unwrap_or(scheduled.operation_id.as_str());
+        let Some(&job_index) = op_to_job.get(lookup_id) else {
+            return None;
+        };
+        buckets[job_index].push(i);
+    }
+
+    // Skip jobs that ended up empty after scheduling — they'd produce a
+    // header with no cuts underneath, which is noise on the machine UI.
+    let partitions: Vec<(&JobSpec, Vec<usize>)> = jobs
+        .iter()
+        .zip(buckets.into_iter())
+        .filter(|(_, indices)| !indices.is_empty())
+        .collect();
+
+    if partitions.is_empty() {
+        return None;
+    }
+    Some(partitions)
+}
+
+fn append_job_header<'input>(
+    program: &mut Vec<Token<'input>>,
+    job: &JobSpec,
+    job_index: usize,
+    total_jobs: usize,
+    shifted_bounds: Option<(f64, f64, f64, f64)>,
+    preview_offset: Vector<f64>,
+) {
+    program.push(comment_token(format!(
+        " === JOB {}/{}: {} ===",
+        job_index, total_jobs, job.name
+    )));
+    program.push(comment_token(format!(" JOB_ID: {}", job.id)));
+    program.push(comment_token(format!(" JOB_NAME: {}", job.name)));
+    program.push(comment_token(format!(" JOB_INDEX: {}", job_index)));
+    program.push(comment_token(format!(" JOB_TOTAL: {}", total_jobs)));
+    if let Some((min_x, min_y, max_x, max_y)) = shifted_bounds {
+        program.push(comment_token(format!(
+            " JOB_BOUNDS: X {:.3} {:.3}, Y {:.3} {:.3}",
+            min_x, max_x, min_y, max_y
+        )));
+    }
+    program.push(comment_token(format!(
+        " JOB_ANCHOR: {}",
+        job.path_anchor.as_gcode_token()
+    )));
+    program.push(comment_token(format!(
+        " JOB_CROSS_OFFSET_FROM_ARTBOARD_BL: X {:.3}, Y {:.3}",
+        job.cross_offset_from_artboard_bl[0], job.cross_offset_from_artboard_bl[1]
+    )));
+    program.push(comment_token(format!(
+        " JOB_PREVIEW_OFFSET: X {:.3}, Y {:.3}",
+        preview_offset.x, preview_offset.y
+    )));
+    program.push(comment_token(format!(
+        " JOB_BIG_SPANNER: {}",
+        job.is_big_spanner
+    )));
+}
+
+/// Emit scheduled groups in the order the frontend laid them out, TSP-
+/// optimising only within contiguous runs sharing an operation id. Returns
+/// the final XY travel cursor so a caller can chain multiple invocations.
+fn emit_scheduled_groups_in_order<'input>(
+    program: &mut Vec<Token<'input>>,
+    machine: &mut Machine<'input>,
+    engraving: &EngravingConfig,
+    tolerance: f64,
+    scheduled_groups: Vec<ScheduledOperationGroup>,
+    mut current: Point<f64>,
+) -> Point<f64> {
+    let mut cursor = 0;
+    while cursor < scheduled_groups.len() {
+        let op_id = scheduled_groups[cursor].operation_id.clone();
+        let mut end = cursor + 1;
+        while end < scheduled_groups.len() && scheduled_groups[end].operation_id == op_id {
+            end += 1;
+        }
+        let chunk: Vec<ScheduledOperationGroup> = scheduled_groups[cursor..end].to_vec();
+        cursor = end;
+
+        let (ordered_groups, next_current) =
+            optimize_scheduled_operation_groups_from(chunk, current);
+        current = next_current;
+        for scheduled in ordered_groups {
+            append_operation_start_marker(
+                program,
+                &scheduled.operation_id,
+                &scheduled.operation_name,
+            );
+            append_engraving_paths(
+                program,
+                machine,
+                engraving,
+                vec![scheduled.group],
+                tolerance,
+            );
+            append_operation_end_marker(program, &scheduled.operation_id);
+        }
+    }
+    current
+}
+
 fn append_cut_metadata<'input>(
     program: &mut Vec<Token<'input>>,
     anchor: PathAnchor,
@@ -2082,51 +2221,96 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
         cb(0, 0, "optimizing");
     }
 
-    let anchor_point = anchor_point_for_bounds(config.anchor, cut_bounds);
-    let anchor_offset = Vector::new(-anchor_point.x, -anchor_point.y);
-    let shifted_bounds = translate_bounds(cut_bounds, anchor_offset);
-    translate_scheduled_operation_groups(&mut scheduled_groups, anchor_offset);
+    // Partition into jobs when the frontend provided a non-empty plan.
+    // `None` or a single-job plan preserves the legacy single-anchor path so
+    // existing callers (CLI, tests, and any consumer that ignores jobs) emit
+    // byte-identical output to before.
+    let job_partitions =
+        partition_scheduled_groups_by_job(&scheduled_groups, config.jobs.as_deref());
 
-    append_cut_metadata(
-        &mut program,
-        config.anchor,
-        shifted_bounds,
-        anchor_point.to_vector(),
-    );
-    append_engraving_program_header(&mut program, &mut machine);
+    match job_partitions {
+        Some(partitions) if partitions.len() > 1 => {
+            let total_jobs = partitions.len();
+            append_engraving_program_header(&mut program, &mut machine);
+            for (job_index, (job, chunk_indices)) in partitions.into_iter().enumerate() {
+                if job_index > 0 {
+                    // Firmware-standard pause — the machine UI catches M0 and
+                    // prompts the user to realign for the next job. See
+                    // summary.md for the full machine-side contract.
+                    program.push(comment_token(" JOB_STOP: realign router before next job"));
+                    // M0 — firmware-standard "program pause" / compulsory stop.
+                    // The g-code crate doesn't ship a ProgramPause variant, so
+                    // we emit the raw field. Machine-side modal is driven by
+                    // the JOB_STOP comment above (see summary.md).
+                    program.push(Token::Field(Field {
+                        letters: Cow::Borrowed("M"),
+                        value: Value::Integer(0),
+                    }));
+                }
 
-    // Preserve the operation order emitted by the frontend. Running the
-    // nearest-neighbor pass across operations would shuffle manually ordered
-    // SVG groups back into each other, so contiguous runs sharing an operation
-    // id are TSP-optimized only inside that run.
-    let mut current = Point::new(0.0, 0.0);
-    let mut cursor = 0;
-    while cursor < scheduled_groups.len() {
-        let op_id = scheduled_groups[cursor].operation_id.clone();
-        let mut end = cursor + 1;
-        while end < scheduled_groups.len() && scheduled_groups[end].operation_id == op_id {
-            end += 1;
+                let mut job_groups: Vec<ScheduledOperationGroup> = chunk_indices
+                    .iter()
+                    .map(|&i| scheduled_groups[i].clone())
+                    .collect();
+
+                let job_bounds = toolpath_bounds(
+                    &job_groups
+                        .iter()
+                        .map(|s| s.group.clone())
+                        .collect::<Vec<_>>(),
+                );
+                let anchor_point = anchor_point_for_bounds(job.path_anchor, job_bounds);
+                let anchor_offset = Vector::new(-anchor_point.x, -anchor_point.y);
+                let shifted_bounds = translate_bounds(job_bounds, anchor_offset);
+                translate_scheduled_operation_groups(&mut job_groups, anchor_offset);
+
+                append_job_header(
+                    &mut program,
+                    job,
+                    job_index + 1,
+                    total_jobs,
+                    shifted_bounds,
+                    anchor_point.to_vector(),
+                );
+
+                // Each job rezeros on the machine, so reset the
+                // nearest-neighbor travel cursor too.
+                let current = Point::new(0.0, 0.0);
+                let _ = emit_scheduled_groups_in_order(
+                    &mut program,
+                    &mut machine,
+                    engraving,
+                    config.tolerance,
+                    job_groups,
+                    current,
+                );
+            }
         }
-        let chunk: Vec<ScheduledOperationGroup> = scheduled_groups[cursor..end].to_vec();
-        cursor = end;
+        _ => {
+            // Single-job (or no-job) path — behaves exactly like today:
+            // metadata comments first, then program header, then ops.
+            let anchor_point = anchor_point_for_bounds(config.anchor, cut_bounds);
+            let anchor_offset = Vector::new(-anchor_point.x, -anchor_point.y);
+            let shifted_bounds = translate_bounds(cut_bounds, anchor_offset);
+            translate_scheduled_operation_groups(&mut scheduled_groups, anchor_offset);
 
-        let (ordered_groups, next_current) =
-            optimize_scheduled_operation_groups_from(chunk, current);
-        current = next_current;
-        for scheduled in ordered_groups {
-            append_operation_start_marker(
+            append_cut_metadata(
                 &mut program,
-                &scheduled.operation_id,
-                &scheduled.operation_name,
+                config.anchor,
+                shifted_bounds,
+                anchor_point.to_vector(),
             );
-            append_engraving_paths(
+            append_engraving_program_header(&mut program, &mut machine);
+
+            let current = Point::new(0.0, 0.0);
+            let _ = emit_scheduled_groups_in_order(
                 &mut program,
                 &mut machine,
                 engraving,
-                vec![scheduled.group],
                 config.tolerance,
+                scheduled_groups,
+                current,
             );
-            append_operation_end_marker(&mut program, &scheduled.operation_id);
         }
     }
 

@@ -3,6 +3,17 @@ import type { OperationLineRange } from "../types";
 
 export type MotionKind = "rapid" | "plunge" | "cut" | "retract";
 
+export type PathAnchor =
+  | "TopLeft"
+  | "TopCenter"
+  | "TopRight"
+  | "MiddleLeft"
+  | "Center"
+  | "MiddleRight"
+  | "BottomLeft"
+  | "BottomCenter"
+  | "BottomRight";
+
 export interface ParsedSegment {
   start: { x: number; y: number; z: number };
   end: { x: number; y: number; z: number };
@@ -16,15 +27,39 @@ export interface ParsedSegment {
   distance: number;
   cumulativeDistanceStart: number;
   cumulativeDistanceEnd: number;
+  /** Job that contains this segment (null for single-job / legacy output). */
+  jobId: string | null;
 }
 
 export interface ParsedEvent {
-  kind: "plunge" | "retract";
+  /** `job_stop` fires at M0 between jobs — playback should pause here and
+   *  surface the realign prompt using `position`/`nextJobId`. */
+  kind: "plunge" | "retract" | "job_stop";
   lineNumber: number;
   distance: number;
   operationId: string | null;
   operationName: string | null;
   position: { x: number; y: number; z: number };
+  /** Only set for `job_stop` — id of the job the machine is about to enter. */
+  nextJobId?: string | null;
+}
+
+/** One job's span in a multi-job program. `previewOffset` is the
+ *  job-local-to-world translation baked into each job's gcode body so the
+ *  3D preview can place it back on the stock. */
+export interface JobSpan {
+  jobId: string;
+  jobName: string;
+  /** 1-based position of the job in the program. */
+  jobIndex: number;
+  jobTotal: number;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number } | null;
+  anchor: PathAnchor;
+  crossOffsetFromArtboardBL: { x: number; y: number };
+  previewOffset: { x: number; y: number };
+  startLine: number;
+  endLine: number;
+  isBigSpanner: boolean;
 }
 
 export interface OperationSpan {
@@ -48,7 +83,12 @@ export interface ParsedProgram {
   totalDistance: number;
   events: ParsedEvent[];
   operationSpans: OperationSpan[];
+  /** Whole-program preview offset. For multi-job programs, this mirrors the
+   *  first job's offset so existing single-offset consumers degrade cleanly;
+   *  per-job offsets live on `jobs[n].previewOffset`. */
   previewOffset: { x: number; y: number };
+  /** Empty for legacy / single-job output. */
+  jobs: JobSpan[];
 }
 
 export interface PlaybackSample {
@@ -65,10 +105,35 @@ export function parseGcodeProgram(
   operationRanges: OperationLineRange[],
 ): ParsedProgram {
   const operationForLine = buildOperationLineMap(operationRanges);
+  const lines = gcode.split(/\r?\n/);
+  const jobs = parseJobSpans(lines);
+  // Fill in job end lines now that we know the total line count.
+  for (let i = 0; i < jobs.length; i += 1) {
+    const nextStart = jobs[i + 1]?.startLine ?? lines.length + 1;
+    jobs[i].endLine = nextStart - 1;
+  }
+  const legacyPreviewOffset = parsePreviewOffset(gcode);
+  // Per-job programs have no top-level PREVIEW_OFFSET; fall back to the
+  // first job's offset so single-offset consumers still see something sane.
+  const previewOffset =
+    jobs.length > 0 ? jobs[0].previewOffset : legacyPreviewOffset;
+
+  const jobForLine = (lineNumber: number): JobSpan | null => {
+    if (jobs.length === 0) return null;
+    // Linear scan is fine — N jobs is small.
+    for (const job of jobs) {
+      if (lineNumber >= job.startLine && lineNumber <= job.endLine) {
+        return job;
+      }
+    }
+    return null;
+  };
+
   let modalCommand: "G0" | "G1" | "G2" | "G3" = "G0";
   let modalFeedrate: number | null = null;
-  const previewOffset = parsePreviewOffset(gcode);
-  let current = { x: previewOffset.x, y: previewOffset.y, z: 0 };
+  let currentJob: JobSpan | null = null;
+  let currentOffset = previewOffset;
+  let current = { x: currentOffset.x, y: currentOffset.y, z: 0 };
   let totalDistance = 0;
   const segments: ParsedSegment[] = [];
   const events: ParsedEvent[] = [];
@@ -104,6 +169,7 @@ export function parseGcodeProgram(
       distance,
       cumulativeDistanceStart: totalDistance,
       cumulativeDistanceEnd: totalDistance + distance,
+      jobId: currentJob?.jobId ?? null,
     };
     totalDistance += distance;
     segments.push(segment);
@@ -140,10 +206,39 @@ export function parseGcodeProgram(
     return { distance };
   };
 
-  for (const [index, rawLine] of gcode.split(/\r?\n/).entries()) {
+  for (const [index, rawLine] of lines.entries()) {
     const lineNumber = index + 1;
+
+    // Handle job boundary transitions before parsing motion on this line.
+    // Each job rebases its gcode around its own anchor, so the parser's
+    // internal "current position" must snap to the new job's world-space
+    // origin before the next move is resolved.
+    const jobForThisLine = jobForLine(lineNumber);
+    if (jobForThisLine !== currentJob) {
+      currentJob = jobForThisLine;
+      currentOffset = currentJob?.previewOffset ?? legacyPreviewOffset;
+      // Reset modal position — a job starts with the spindle parked.
+      current = { x: currentOffset.x, y: currentOffset.y, z: current.z };
+    }
+
     const line = rawLine.split(";")[0].trim();
     if (!line) {
+      continue;
+    }
+
+    // M0 between jobs — emit a `job_stop` event pointing at the upcoming
+    // job so machine playback can surface the realign prompt.
+    if (/^M0\b/i.test(line) || /^M00\b/i.test(line)) {
+      const nextJob = jobs.find((j) => j.startLine > lineNumber) ?? null;
+      events.push({
+        kind: "job_stop",
+        lineNumber,
+        distance: totalDistance,
+        operationId: null,
+        operationName: null,
+        position: { ...current },
+        nextJobId: nextJob?.jobId ?? null,
+      });
       continue;
     }
 
@@ -164,10 +259,10 @@ export function parseGcodeProgram(
       } else if (token === "G3" || token === "G03") {
         modalCommand = "G3";
       } else if (token.startsWith("X")) {
-        next.x = Number.parseFloat(token.slice(1)) + previewOffset.x;
+        next.x = Number.parseFloat(token.slice(1)) + currentOffset.x;
         hasMove = true;
       } else if (token.startsWith("Y")) {
-        next.y = Number.parseFloat(token.slice(1)) + previewOffset.y;
+        next.y = Number.parseFloat(token.slice(1)) + currentOffset.y;
         hasMove = true;
       } else if (token.startsWith("Z")) {
         next.z = Number.parseFloat(token.slice(1));
@@ -211,7 +306,112 @@ export function parseGcodeProgram(
     events,
     operationSpans: buildOperationSpans(segments, operationRanges),
     previewOffset,
+    jobs,
   };
+}
+
+/** Scan top-to-bottom for JOB header blocks. Each job's metadata block
+ *  follows the `; === JOB N/M: name ===` separator; the block ends when
+ *  the next non-comment line appears (gcode body) or another JOB header
+ *  starts. `endLine` is filled in by the caller once the total line count
+ *  is known. */
+function parseJobSpans(lines: string[]): JobSpan[] {
+  const jobs: JobSpan[] = [];
+  const commentPattern = /^\s*;\s*/;
+  const headerPattern = /^===\s*JOB\s+(\d+)\/(\d+)\s*:\s*(.*?)\s*===\s*$/;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i];
+    const commentMatch = raw.match(commentPattern);
+    if (!commentMatch) continue;
+    const comment = raw.slice(commentMatch[0].length);
+    const header = comment.match(headerPattern);
+    if (!header) continue;
+
+    const startLine = i + 1;
+    const jobIndex = Number.parseInt(header[1]!, 10);
+    const jobTotal = Number.parseInt(header[2]!, 10);
+    const jobName = header[3]!.trim();
+
+    let jobId = "";
+    let bounds: JobSpan["bounds"] = null;
+    let anchor: PathAnchor = "Center";
+    let crossOffsetFromArtboardBL = { x: 0, y: 0 };
+    let previewOffset = { x: 0, y: 0 };
+    let isBigSpanner = false;
+
+    for (let k = i + 1; k < lines.length; k += 1) {
+      const kRaw = lines[k];
+      const kCommentMatch = kRaw.match(commentPattern);
+      if (!kCommentMatch) break;
+      const kComment = kRaw.slice(kCommentMatch[0].length).trim();
+
+      if (headerPattern.test(kComment)) break;
+      const kv = kComment.match(/^([A-Z_][A-Z0-9_]*)\s*:\s*(.*)$/);
+      if (!kv) continue;
+      const key = kv[1]!;
+      const value = kv[2]!.trim();
+
+      if (key === "JOB_ID") {
+        jobId = value;
+      } else if (key === "JOB_NAME") {
+        // The header's `name` is authoritative; this key is parsed for
+        // completeness but currently only used as a cross-check.
+      } else if (key === "JOB_BOUNDS") {
+        const m = value.match(
+          /X\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*,?\s*Y\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)/,
+        );
+        if (m) {
+          bounds = {
+            minX: Number.parseFloat(m[1]!),
+            maxX: Number.parseFloat(m[2]!),
+            minY: Number.parseFloat(m[3]!),
+            maxY: Number.parseFloat(m[4]!),
+          };
+        }
+      } else if (key === "JOB_ANCHOR") {
+        anchor = (value as PathAnchor) ?? "Center";
+      } else if (key === "JOB_CROSS_OFFSET_FROM_ARTBOARD_BL") {
+        const m = value.match(
+          /X\s+(-?\d+(?:\.\d+)?)\s*,?\s*Y\s+(-?\d+(?:\.\d+)?)/,
+        );
+        if (m) {
+          crossOffsetFromArtboardBL = {
+            x: Number.parseFloat(m[1]!),
+            y: Number.parseFloat(m[2]!),
+          };
+        }
+      } else if (key === "JOB_PREVIEW_OFFSET") {
+        const m = value.match(
+          /X\s+(-?\d+(?:\.\d+)?)\s*,?\s*Y\s+(-?\d+(?:\.\d+)?)/,
+        );
+        if (m) {
+          previewOffset = {
+            x: Number.parseFloat(m[1]!),
+            y: Number.parseFloat(m[2]!),
+          };
+        }
+      } else if (key === "JOB_BIG_SPANNER") {
+        isBigSpanner = value.toLowerCase() === "true";
+      }
+    }
+
+    jobs.push({
+      jobId: jobId || `job-${jobIndex}`,
+      jobName,
+      jobIndex,
+      jobTotal,
+      bounds,
+      anchor,
+      crossOffsetFromArtboardBL,
+      previewOffset,
+      startLine,
+      endLine: lines.length, // filled in by caller
+      isBigSpanner,
+    });
+  }
+
+  return jobs;
 }
 
 function parsePreviewOffset(gcode: string): { x: number; y: number } {

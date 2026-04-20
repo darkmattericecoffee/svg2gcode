@@ -19,6 +19,7 @@ export type {
   GenerateJobResponse,
   SvgDocumentMetrics,
   JobProgress,
+  JobSpec,
 } from "./types";
 
 // Settings helpers

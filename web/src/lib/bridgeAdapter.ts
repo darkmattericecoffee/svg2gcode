@@ -6,6 +6,8 @@ import {
   engraveTypeToFillMode,
   splitCompositeElementId,
   type ArtObject,
+  type FrontendOperation,
+  type JobSpec,
   type Settings,
   type EngraveType as BridgeEngraveType,
 } from "@svg2gcode/bridge"
@@ -24,6 +26,7 @@ import { getNodeSize } from "./nodeDimensions"
 import { exportToSVG } from "./svgExport"
 import { buildBridgeSettings, resolveEffectiveMaxStepdown } from "./bridgeSettingsAdapter"
 import { computeCutOrder, type CutOrderResult } from "./cutOrder"
+import { computeJobs, type ComputedJob } from "./jobs"
 
 /**
  * Convert the editor's canvas state into bridge ArtObjects for GCode generation.
@@ -53,6 +56,9 @@ export async function editorStateToArtObjects(
     machiningSettings.manualCutOrder,
   )
   const cutOrderLookup = buildCutOrderLookup(cutOrder)
+  const jobIdByNodeId = machiningSettings.jobsEnabled
+    ? buildJobLookup(computeJobs(cutOrder, nodesById, machiningSettings, artboard).jobs)
+    : new Map<string, string>()
 
   for (const rootId of rootIds) {
     const rootNode = nodesById[rootId]
@@ -127,6 +133,7 @@ export async function editorStateToArtObjects(
           exportInfo.metadataNodesById,
           machiningSettings,
           cutOrderLookup,
+          jobIdByNodeId,
           artObjects.length,
         )
         artObjects.push(artObject)
@@ -152,6 +159,14 @@ function buildCutOrderLookup(cutOrder: CutOrderResult): CutOrderLookup {
   return { indexByNodeId, groupIdByNodeId }
 }
 
+function buildJobLookup(jobs: ComputedJob[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const job of jobs) {
+    for (const nodeId of job.nodeIds) out.set(nodeId, job.id)
+  }
+  return out
+}
+
 /**
  * Full GCode generation pipeline: editor state → ArtObjects → composed SVG → operations.
  * Returns the inputs needed for `generateEngravingJob`.
@@ -163,7 +178,6 @@ export async function prepareGenerationInputs(
   machiningSettings: MachiningSettings,
   baseSettings: Settings,
 ) {
-  const settings = buildBridgeSettings(baseSettings, artboard, machiningSettings)
   const artObjects = await editorStateToArtObjects(
     nodesById,
     rootIds,
@@ -176,8 +190,23 @@ export async function prepareGenerationInputs(
     throw new Error("No visible objects on the artboard to generate GCode from.")
   }
 
-  const composedSvg = ensurePocketFillsOnComposedSvg(composeArtObjectsSvg(artObjects, settings))
+  // Build jobs from the current cut-order + scene. When jobsEnabled is false,
+  // we pass `null` so `buildBridgeSettings` keeps the legacy single-anchor path.
+  const cutOrder = computeCutOrder(
+    rootIds,
+    nodesById,
+    machiningSettings.cutOrderStrategy,
+    machiningSettings.manualCutOrder,
+  )
+  const { jobs: computedJobs } = computeJobs(cutOrder, nodesById, machiningSettings, artboard)
+
   const operations = getDerivedOperationsForArtObjects(artObjects)
+  const jobSpecs = machiningSettings.jobsEnabled
+    ? jobSpecsFromComputedJobs(computedJobs, operations, artObjects)
+    : null
+
+  const settings = buildBridgeSettings(baseSettings, artboard, machiningSettings, jobSpecs)
+  const composedSvg = ensurePocketFillsOnComposedSvg(composeArtObjectsSvg(artObjects, settings))
   const deepestTargetDepth = operations.reduce(
     (max, operation) => Math.max(max, operation.target_depth_mm),
     0,
@@ -192,6 +221,136 @@ export async function prepareGenerationInputs(
   }
 
   return { normalized_svg: composedSvg, settings, operations }
+}
+
+/**
+ * Resolve ComputedJob → JobSpec by mapping each job's editor nodeIds to the
+ * FrontendOperation ids they produced. An editor leaf becomes one or more
+ * ArtObject element assignments; each derived operation bundles elements by
+ * `cutOrderGroupId` (which embeds the nodeId's cut-order group).
+ *
+ * When the mapping is ambiguous (no operations can be assigned to a job, or a
+ * single operation spans multiple jobs), we return `null` so Rust falls back
+ * to single-job emission instead of producing a malformed partition.
+ */
+export function jobSpecsFromComputedJobs(
+  computedJobs: ComputedJob[],
+  operations: FrontendOperation[],
+  artObjects: ArtObject[],
+): JobSpec[] | null {
+  if (computedJobs.length <= 1 || operations.length === 0) return null
+
+  const operationsByExplicitJobId = new Map<string, string[]>()
+  let explicitCount = 0
+  for (const operation of operations) {
+    if (!operation.jobId) continue
+    explicitCount += 1
+    const list = operationsByExplicitJobId.get(operation.jobId) ?? []
+    list.push(operation.id)
+    operationsByExplicitJobId.set(operation.jobId, list)
+  }
+
+  if (explicitCount === operations.length) {
+    const specs: JobSpec[] = []
+    const assignedOperationIds = new Set<string>()
+    for (const job of computedJobs) {
+      const operationIdsForJob = operationsByExplicitJobId.get(job.id) ?? []
+      if (operationIdsForJob.length === 0) return null
+      for (const id of operationIdsForJob) assignedOperationIds.add(id)
+      specs.push({
+        id: job.id,
+        name: job.name,
+        operation_ids: operationIdsForJob,
+        path_anchor: job.pathAnchor,
+        cross_offset_from_artboard_bl: [
+          job.crossOffsetFromArtboardBL.x,
+          job.crossOffsetFromArtboardBL.y,
+        ],
+        is_big_spanner: job.isBigSpanner,
+      })
+    }
+    if (assignedOperationIds.size !== operations.length) return null
+    return specs
+  }
+
+  // Index every operation by its contributing node ids. `cutOrderGroupId` was
+  // set in `applyEditorCncMetadata` to `${artObjectId}::${editorGroupId}` — we
+  // flatten back to the set of editor nodeIds that composed the operation's
+  // elements (via the assignment records on each art object).
+  const nodeIdsByOperationId = new Map<string, Set<string>>()
+  const elementToNode = new Map<string, string>()
+  // Note: we lack a direct element→nodeId map in ArtObject. The `leafMeta`
+  // list built during `applyEditorCncMetadata` walks nodes in document order,
+  // which matches `Object.keys(elementAssignments)` order — so we can rebuild
+  // the mapping positionally here. This is the same positional correspondence
+  // that `applyEditorCncMetadata` already relies on.
+  for (const artObject of artObjects) {
+    const elementIds = Object.keys(artObject.elementAssignments)
+    // We don't have direct access to editor nodes from here; instead we lean on
+    // the operation list below. Elements contributing to each operation share a
+    // `cutOrderGroupId`, which carries a stable suffix we can decode.
+    for (const elementId of elementIds) {
+      const assignment = artObject.elementAssignments[elementId]
+      if (!assignment) continue
+      // `cutOrderGroupId` looks like "<artObjectId>::<editorGroupId>" OR just
+      // "<artObjectId>" for leaves that sat directly at the root. We don't have
+      // leaf nodeIds from the bridge side, so this map stays coarse — the job
+      // matcher below falls back on cutOrderIndex ranges.
+      elementToNode.set(elementId, assignment.cutOrderGroupId ?? artObject.id)
+    }
+  }
+
+  for (const operation of operations) {
+    const set = new Set<string>()
+    for (const elementId of operation.assigned_element_ids) {
+      const nodeMarker = elementToNode.get(elementId)
+      if (nodeMarker) set.add(nodeMarker)
+    }
+    nodeIdsByOperationId.set(operation.id, set)
+  }
+
+  // For each computed job, pick the operations whose any contributing
+  // cutOrderGroupId overlaps the job's nodeIds. We compare markers, so this
+  // only fires for jobs whose nodeIds show up as cutOrderGroupIds — root-level
+  // single-node leaves and manual-override jobs built from the layer tree.
+  const specs: JobSpec[] = []
+  const assignedOperationIds = new Set<string>()
+  for (const job of computedJobs) {
+    const operationIdsForJob: string[] = []
+    for (const operation of operations) {
+      if (assignedOperationIds.has(operation.id)) continue
+      const markers = nodeIdsByOperationId.get(operation.id) ?? new Set<string>()
+      const matches = job.nodeIds.some((nodeId) =>
+        Array.from(markers).some((marker) => marker.endsWith(`::${nodeId}`) || marker === nodeId),
+      )
+      if (matches) {
+        operationIdsForJob.push(operation.id)
+        assignedOperationIds.add(operation.id)
+      }
+    }
+    if (operationIdsForJob.length === 0) {
+      // One of the jobs has nothing to do — bail out rather than ship an empty
+      // job header. The backward-compat single-anchor path is safer.
+      return null
+    }
+    specs.push({
+      id: job.id,
+      name: job.name,
+      operation_ids: operationIdsForJob,
+      path_anchor: job.pathAnchor,
+      cross_offset_from_artboard_bl: [
+        job.crossOffsetFromArtboardBL.x,
+        job.crossOffsetFromArtboardBL.y,
+      ],
+      is_big_spanner: job.isBigSpanner,
+    })
+  }
+
+  // Every operation must end up in exactly one job — otherwise Rust would
+  // silently drop cuts. When coverage isn't clean we bail back to single-job.
+  if (assignedOperationIds.size !== operations.length) return null
+
+  return specs
 }
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
@@ -301,6 +460,7 @@ function applyEditorCncMetadata(
   nodesById: Record<string, CanvasNode>,
   machiningSettings: MachiningSettings,
   cutOrder?: CutOrderLookup,
+  jobIdByNodeId?: Map<string, string>,
   artObjectOrdinal = 0,
 ) {
   // Collect leaf nodes with CNC metadata in document order
@@ -350,6 +510,9 @@ function applyEditorCncMetadata(
         ? `${artObject.id}::${baseGroupId}`
         : artObject.id
       assignment.cutOrderIndex = ordinalOffset + (baseIndex ?? i)
+      if (leafNodeId && jobIdByNodeId?.has(leafNodeId)) {
+        assignment.jobId = jobIdByNodeId.get(leafNodeId)
+      }
     }
   }
 }

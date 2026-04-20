@@ -6,6 +6,7 @@ export {
   type ParsedProgram,
   type PlaybackSample,
   type OperationSpan,
+  type JobSpan,
   type MotionKind,
 } from "./parse-gcode";
 

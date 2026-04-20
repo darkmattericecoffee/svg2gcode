@@ -1,4 +1,4 @@
-import type { Settings } from "@svg2gcode/bridge"
+import type { JobSpec, Settings } from "@svg2gcode/bridge"
 import type { ArtboardState, MachiningSettings } from "../types/editor"
 
 function roundStepdown(value: number): number {
@@ -31,6 +31,7 @@ export function buildBridgeSettings(
   base: Settings,
   artboard: ArtboardState,
   machining: MachiningSettings,
+  jobs: JobSpec[] | null = null,
 ): Settings {
   return {
     ...base,
@@ -48,6 +49,7 @@ export function buildBridgeSettings(
         machining.clusterDetourRadius != null && machining.clusterDetourRadius > 0
           ? machining.clusterDetourRadius
           : null,
+      jobs: machining.jobsEnabled && jobs && jobs.length > 1 ? jobs : null,
     },
     engraving: {
       ...base.engraving,

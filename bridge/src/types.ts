@@ -12,6 +12,32 @@ export type PathAnchor =
   | "BottomCenter"
   | "BottomRight";
 
+/**
+ * Per-job partition sent to the Rust CAM pass. When present and non-empty, the
+ * emitter splits the program at job boundaries, writes a `; === JOB N/M …`
+ * header block per job, and inserts `M0` between jobs so the machine UI can
+ * prompt the user to realign the handheld router before resuming.
+ *
+ * Each job's geometry is rebased to its own local zero at the specified
+ * `path_anchor`, so drift accumulated during the job stays bounded by the
+ * job's own extent rather than the whole program.
+ */
+export interface JobSpec {
+  /** Stable id from the frontend (matches `Job.id` in the editor store). */
+  id: string;
+  /** Human name — shown in gcode comments and the machine-side modal. */
+  name: string;
+  /** Operation ids (from `FrontendOperation.id`) that belong to this job. */
+  operation_ids: string[];
+  /** Anchor selector for the job's local-zero origin. */
+  path_anchor: PathAnchor;
+  /** Pencil-cross offset measured from the artboard's bottom-left corner (mm).
+   *  `[x_from_left_edge, y_from_bottom_edge]` — what the user scribes on wood. */
+  cross_offset_from_artboard_bl: [number, number];
+  /** True when auto-detection tagged this job as the passe-partout / frame. */
+  is_big_spanner: boolean;
+}
+
 export interface Settings {
   conversion: {
     tolerance: number;
@@ -24,6 +50,9 @@ export interface Settings {
     /** Radius (mm) for the post-TSP cluster-detour pass; null disables. */
     cluster_detour_radius: number | null;
     selector_filter: string | null;
+    /** Per-job partition. `null` or empty → emit a single contiguous program
+     *  with the top-level `anchor` (legacy path). */
+    jobs: JobSpec[] | null;
   };
   engraving: {
     enabled: boolean;
@@ -121,6 +150,8 @@ export interface FrontendOperation {
   engrave_type?: EngraveType | null;
   fill_mode?: FillMode | null;
   allow_thicken_routing?: boolean;
+  /** Editor job id for multi-job output. Operations with different job ids stay separate. */
+  jobId?: string;
 }
 
 export interface ElementAssignment {
@@ -133,6 +164,8 @@ export interface ElementAssignment {
   cutOrderGroupId?: string;
   /** Global 0-based sort index across every element; used to order operations to minimize wander. */
   cutOrderIndex?: number;
+  /** Editor job id for multi-job output. */
+  jobId?: string;
 }
 
 export interface AssignmentProfileGroup {
@@ -146,6 +179,8 @@ export interface AssignmentProfileGroup {
   cutOrderGroupId?: string;
   /** Minimum cut-order index across this group's elements; drives operation ordering. */
   minCutOrderIndex?: number;
+  /** Editor job id for multi-job output. */
+  jobId?: string;
 }
 
 export interface GenerateJobRequest {

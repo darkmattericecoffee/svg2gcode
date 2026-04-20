@@ -72,6 +72,34 @@ impl PathAnchor {
     }
 }
 
+/// Per-job partition sent from the frontend. When `ConversionConfig::jobs`
+/// is `Some` and non-empty, the emitter splits the program at job
+/// boundaries, writes a header block per job, and inserts `M0` between
+/// jobs so the machine UI can prompt the user to realign the handheld
+/// router before resuming. Each job's geometry is rebased to its own
+/// local zero at the job's `path_anchor`, so drift accumulated during the
+/// job stays bounded by the job's own extent rather than the whole
+/// program.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub struct JobSpec {
+    /// Stable id from the frontend (matches `Job.id` in the editor store).
+    pub id: String,
+    /// Human name — shown in gcode comments and the machine-side modal.
+    pub name: String,
+    /// Operation ids (from `FrontendOperation.id`) that belong to this job.
+    pub operation_ids: Vec<String>,
+    /// Anchor selector for the job's local-zero origin.
+    pub path_anchor: PathAnchor,
+    /// Pencil-cross offset measured from the artboard's bottom-left corner
+    /// (mm). `[x_from_left_edge, y_from_bottom_edge]` — what the user
+    /// scribes on wood.
+    pub cross_offset_from_artboard_bl: [f64; 2],
+    /// True when auto-detection tagged this job as the passe-partout / frame.
+    pub is_big_spanner: bool,
+}
+
 /// High-level output configuration
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -106,6 +134,11 @@ pub struct ConversionConfig {
     /// <https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Selectors>
     #[cfg_attr(feature = "serde", serde(default))]
     pub selector_filter: Option<String>,
+    /// Per-job partition. `None` or empty → emit a single contiguous
+    /// program using the top-level `anchor` (legacy path). When present,
+    /// the CAM pass splits emission at job boundaries with `M0` between.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub jobs: Option<Vec<JobSpec>>,
 }
 
 const fn zero_origin() -> [Option<f64>; 2] {
@@ -124,6 +157,7 @@ impl Default for ConversionConfig {
             anchor: PathAnchor::BottomLeft,
             cluster_detour_radius: None,
             selector_filter: None,
+            jobs: None,
         }
     }
 }

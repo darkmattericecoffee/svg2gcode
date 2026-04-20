@@ -44,7 +44,13 @@ export function groupSegments(
     currentSegments = []
   }
 
+  let currentJobId: string | null | undefined = undefined
   for (const segment of segments) {
+    const segJobId = segment.jobId ?? null
+    if (currentJobId !== undefined && segJobId !== currentJobId) {
+      flushGroup()
+    }
+    currentJobId = segJobId
     if (segment.motionKind === 'cut') {
       if (currentPoints.length === 0) {
         currentPoints.push({ x: segment.start.x, y: segment.start.y })

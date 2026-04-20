@@ -28,6 +28,11 @@ interface EditorContextMenuProps {
   y: number
   showRename?: boolean
   onRename?: () => void
+  jobActions?: {
+    jobs: Array<{ id: string; label: string; name: string }>
+    canAssign: boolean
+    onAddToJob: (targetJobId: string | 'new') => void
+  }
   onOpenChange: (isOpen: boolean) => void
 }
 
@@ -69,6 +74,7 @@ export function EditorContextMenu({
   y,
   showRename = false,
   onRename,
+  jobActions,
   onOpenChange,
 }: EditorContextMenuProps) {
   const selectedIds = useEditorStore((state) => state.selectedIds)
@@ -141,7 +147,13 @@ export function EditorContextMenu({
       case 'cut-type-pocket':
         setSelectedEngraveType('pocket')
         break
+      case 'job-new':
+        jobActions?.onAddToJob('new')
+        break
       default:
+        if (String(key).startsWith('job-existing:')) {
+          jobActions?.onAddToJob(String(key).slice('job-existing:'.length))
+        }
         break
     }
   }
@@ -295,6 +307,30 @@ export function EditorContextMenu({
               </Dropdown.Menu>
             </Dropdown.Popover>
           </Dropdown.SubmenuTrigger>
+
+          {jobActions ? (
+            <Dropdown.SubmenuTrigger>
+              <Dropdown.Item id="add-to-job" textValue="Add to job" isDisabled={!hasSelection || !jobActions.canAssign}>
+                <ItemIcon icon={GroupIcon} />
+                <Label>Add to job</Label>
+                <Dropdown.SubmenuIndicator />
+              </Dropdown.Item>
+              <Dropdown.Popover>
+                <Dropdown.Menu onAction={runAction} aria-label="Job actions">
+                  <Dropdown.Item id="job-new" textValue="New job from selection">
+                    <ItemIcon icon={GroupIcon} />
+                    <Label>New job from selection</Label>
+                  </Dropdown.Item>
+                  {jobActions.jobs.map((job) => (
+                    <Dropdown.Item key={job.id} id={`job-existing:${job.id}`} textValue={`${job.label} ${job.name}`}>
+                      <ItemIcon icon={GroupIcon} />
+                      <Label>{job.label}</Label>
+                    </Dropdown.Item>
+                  ))}
+                </Dropdown.Menu>
+              </Dropdown.Popover>
+            </Dropdown.SubmenuTrigger>
+          ) : null}
         </Dropdown.Menu>
       </Dropdown.Popover>
     </Dropdown>
