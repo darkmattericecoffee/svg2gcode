@@ -344,6 +344,18 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   const toolDiameter = useEditorStore((state) => state.machiningSettings.toolDiameter)
   const updateNodeTransform = useEditorStore((state) => state.updateNodeTransform)
   const { enterFocusMode, isSelected, selectMany, selectedIds, selectNode } = useSelection()
+  const requestFocusText = useEditorStore((state) => state.requestFocusText)
+  const startEditingText = useEditorStore((state) => state.startEditingText)
+  const editingTextNodeId = useEditorStore((state) => state.ui.editingTextNodeId)
+
+  const shouldBreatheWhileTransforming =
+    node?.type === 'group' &&
+    node.generatorMetadata?.params.kind === 'scallopFrame' &&
+    isTransforming &&
+    !hitboxOnly &&
+    !!node &&
+    isSelected(node.id)
+  const breathingOpacity = useBreathingOpacity(shouldBreatheWhileTransforming)
 
   if (!node || !node.visible) {
     return null
@@ -358,7 +370,12 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   const effectiveRenderMode = getFocusRenderMode(nodeId, effectiveFocusGroupId, nodesById)
   const isDimmed = parentDimmed || effectiveRenderMode === 'dimmed'
   const centerlineOpacity = node.centerlineMetadata?.enabled ? 0.2 : 1
-  const opacity = hitboxOnly ? 0 : (isDimmed ? node.opacity * 0.22 : node.opacity) * centerlineOpacity
+  const hideForInlineEdit = editingTextNodeId !== null && editingTextNodeId === node.id
+  const opacity = hitboxOnly
+    ? 0
+    : hideForInlineEdit
+      ? 0
+      : (isDimmed ? node.opacity * 0.22 : node.opacity) * centerlineOpacity
   const resolvedSelectionTarget = resolveSelectionTarget(
     node.id,
     nodesById,
@@ -430,6 +447,12 @@ export const ShapeRenderer = memo(function ShapeRenderer({
     if ('button' in event.evt && event.evt.button !== 0) return
     event.cancelBubble = true
     if (activeInteractionMode === 'direct') return
+    if (node.type === 'group' && node.generatorMetadata?.params.kind === 'text') {
+      selectNode(node.id)
+      requestFocusText(node.id)
+      startEditingText(node.id)
+      return
+    }
     enterFocusMode(node.id)
   }
 
@@ -473,15 +496,6 @@ export const ShapeRenderer = memo(function ShapeRenderer({
     onDragMove,
     onDragEnd,
   }
-
-  const shouldBreatheWhileTransforming =
-    node.type === 'group' &&
-    node.generatorMetadata?.params.kind === 'scallopFrame' &&
-    isTransforming &&
-    commonProps.isSelected &&
-    !hitboxOnly
-
-  const breathingOpacity = useBreathingOpacity(shouldBreatheWhileTransforming)
 
   if (node.type === 'group') {
     const groupNode = node as GroupNode

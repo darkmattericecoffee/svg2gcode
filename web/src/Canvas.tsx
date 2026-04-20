@@ -26,6 +26,7 @@ import { generateCenterlineForNode } from './lib/centerline'
 import { LIBRARY_DRAG_MIME, parseLibraryDragPayload } from './lib/libraryItems'
 import { EngravePreviewStack, ShapeRenderer } from './ShapeRenderer'
 import { EditorContextMenu } from './components/EditorContextMenu'
+import { TextEditOverlay } from './components/TextEditOverlay'
 import { useCanvasState } from './hooks/useCanvasState'
 import { useSelection } from './hooks/useSelection'
 import { useEditorStore } from './store'
@@ -1607,6 +1608,8 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
         y={contextMenu.y}
         onOpenChange={(isOpen) => setContextMenu((current) => ({ ...current, isOpen }))}
       />
+
+      <TextEditOverlay />
 
       {/* Bottom floating toolbar */}
       <div className="pointer-events-none absolute inset-x-0 bottom-7 z-20 flex justify-center px-6">

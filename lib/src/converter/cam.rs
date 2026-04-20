@@ -1472,6 +1472,7 @@ fn append_cut_metadata<'input>(
     program: &mut Vec<Token<'input>>,
     anchor: PathAnchor,
     bounds: Option<(f64, f64, f64, f64)>,
+    preview_offset: Vector<f64>,
 ) {
     if let Some((min_x, min_y, max_x, max_y)) = bounds {
         program.push(comment_token(format!(
@@ -1482,6 +1483,10 @@ fn append_cut_metadata<'input>(
     program.push(comment_token(format!(
         " ANCHOR: {}",
         anchor.as_gcode_token()
+    )));
+    program.push(comment_token(format!(
+        " PREVIEW_OFFSET: X {:.3}, Y {:.3}",
+        preview_offset.x, preview_offset.y
     )));
 }
 
@@ -1964,7 +1969,12 @@ pub fn svg2program_engraving<'a, 'input: 'a>(
     let anchor_offset = Vector::new(-anchor_point.x, -anchor_point.y);
     let shifted_bounds = translate_bounds(cut_bounds, anchor_offset);
     translate_operation_groups(&mut groups, anchor_offset);
-    append_cut_metadata(&mut program, config.anchor, shifted_bounds);
+    append_cut_metadata(
+        &mut program,
+        config.anchor,
+        shifted_bounds,
+        anchor_point.to_vector(),
+    );
     append_engraving_program_header(&mut program, &mut machine);
     append_engraving_paths(
         &mut program,
@@ -2077,7 +2087,12 @@ pub fn svg2program_engraving_multi_with_progress<'a, 'input: 'a>(
     let shifted_bounds = translate_bounds(cut_bounds, anchor_offset);
     translate_scheduled_operation_groups(&mut scheduled_groups, anchor_offset);
 
-    append_cut_metadata(&mut program, config.anchor, shifted_bounds);
+    append_cut_metadata(
+        &mut program,
+        config.anchor,
+        shifted_bounds,
+        anchor_point.to_vector(),
+    );
     append_engraving_program_header(&mut program, &mut machine);
 
     // Preserve the operation order emitted by the frontend. Running the

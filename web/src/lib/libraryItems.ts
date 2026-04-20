@@ -1,12 +1,14 @@
 import dominoImage from '../assets/library/domino.png'
 import dowelImage from '../assets/library/dowel.png'
 import scallopFrameImage from '../assets/library/scallop-frame.svg'
+import textImage from '../assets/library/text.svg'
 import type {
   BasicShapeKind,
   DowelHoleParams,
   GeneratorParams,
   ScallopFrameParams,
   TenonParams,
+  TextParams,
 } from '../types/editor'
 
 export const LIBRARY_DRAG_MIME = 'application/x-svg2gcode-library-item'
@@ -43,6 +45,18 @@ export const DEFAULT_SCALLOP_FRAME: ScallopFrameParams = {
   height: 90,
   minScallopSize: 12,
   outputType: 'contour',
+}
+
+export const DEFAULT_TEXT: TextParams = {
+  kind: 'text',
+  name: 'Text',
+  text: 'Hello',
+  fontFamily: 'Roboto',
+  fontVariant: 'regular',
+  fontSizePt: 72,
+  align: 'start',
+  lineHeight: 1.2,
+  outputType: 'pocket',
 }
 
 export interface GeneratorLibraryItem {
@@ -96,6 +110,15 @@ export const GENERATOR_LIBRARY_ITEMS: GeneratorLibraryItem[] = [
     imageSrc: scallopFrameImage,
     tags: ['scallop', 'frame', 'border', 'decorative'],
     defaultParams: DEFAULT_SCALLOP_FRAME,
+  },
+  {
+    itemType: 'generator',
+    kind: 'text',
+    label: 'Text',
+    description: 'Engravable text from Google Fonts.',
+    imageSrc: textImage,
+    tags: ['text', 'font', 'label', 'type', 'letters'],
+    defaultParams: DEFAULT_TEXT,
   },
 ]
 

@@ -6,3 +6,5 @@ dist
 lib/approx_circle.svg
 **/out
 bridge/node_modules/
+web/.env.local
+web/.env.*.local

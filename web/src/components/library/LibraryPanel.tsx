@@ -7,8 +7,9 @@ import {
   LIBRARY_ITEMS,
   createLibraryDragPayload,
 } from '../../lib/libraryItems'
+import { loadGoogleFont } from '../../lib/fonts/googleFonts'
 import { useEditorStore } from '../../store'
-import type { BasicShapeKind, GeneratorParams } from '../../types/editor'
+import type { BasicShapeKind, GeneratorParams, TextParams } from '../../types/editor'
 
 function cn(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')
@@ -51,8 +52,18 @@ export function LibraryPanel() {
     )
   })
 
-  const addItemToArtboard = (item: (typeof LIBRARY_ITEMS)[number]) => {
+  const addItemToArtboard = async (item: (typeof LIBRARY_ITEMS)[number]) => {
     if (item.itemType === 'generator') {
+      if (item.defaultParams.kind === 'text') {
+        const params = item.defaultParams as TextParams
+        try {
+          await loadGoogleFont(params.fontFamily, params.fontVariant)
+        } catch (err) {
+          console.warn('Failed to preload Google Font', err)
+        }
+        placeGenerator(params)
+        return
+      }
       placeGenerator(item.defaultParams as GeneratorParams)
       return
     }

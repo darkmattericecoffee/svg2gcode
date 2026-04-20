@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SearchField } from '@heroui/react'
-import { ChevronDown, ChevronRight, Geo, GeoFill, LayoutCells, Sparkles } from '@gravity-ui/icons'
+import { ChevronDown, ChevronRight, Font, Geo, GeoFill, LayoutCells, Sparkles } from '@gravity-ui/icons'
 
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
@@ -746,9 +746,15 @@ export function LayerTree() {
                         <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3.5 w-3.5" />
                       </span>
                       {isGroup && (node as GroupNode).generatorMetadata ? (
-                        <span title="Parametric generator" className="text-primary/70">
-                          <Sparkles className="h-3.5 w-3.5" />
-                        </span>
+                        (node as GroupNode).generatorMetadata?.params.kind === 'text' ? (
+                          <span title="Text generator" className="text-primary/70">
+                            <Font className="h-3.5 w-3.5" />
+                          </span>
+                        ) : (
+                          <span title="Parametric generator" className="text-primary/70">
+                            <Sparkles className="h-3.5 w-3.5" />
+                          </span>
+                        )
                       ) : null}
                       {node.gridMetadata ? (
                         <span title="Grid / Repeat" className="text-primary/70">
@@ -970,9 +976,15 @@ function TreeNode({
             <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3 w-3" />
           </span>
           {isGroup && (node as GroupNode).generatorMetadata ? (
-            <span title="Parametric generator" className="text-primary/70">
-              <Sparkles className="h-3 w-3" />
-            </span>
+            (node as GroupNode).generatorMetadata?.params.kind === 'text' ? (
+              <span title="Text generator" className="text-primary/70">
+                <Font className="h-3 w-3" />
+              </span>
+            ) : (
+              <span title="Parametric generator" className="text-primary/70">
+                <Sparkles className="h-3 w-3" />
+              </span>
+            )
           ) : null}
           {node.gridMetadata ? (
             <span title="Grid / Repeat" className="text-primary/70">

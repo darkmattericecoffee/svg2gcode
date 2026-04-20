@@ -54,6 +54,10 @@ function App() {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('design')
+  const focusTextRequestId = useEditorStore((state) => state.ui.focusTextRequestId)
+  useEffect(() => {
+    if (focusTextRequestId) setInspectorTab('design')
+  }, [focusTextRequestId])
   const [projectName, setProjectName] = useState('Untitled project')
   const [materialPreset, setMaterialPreset] = useState<MaterialPreset>(DEFAULT_MATERIAL)
   const [isDragOver, setIsDragOver] = useState(false)

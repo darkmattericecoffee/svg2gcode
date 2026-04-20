@@ -16,6 +16,7 @@ import { CutDepthEditor } from './CutDepthEditor'
 import { DowelHoleForm } from './library/DowelHoleForm'
 import { ScallopFrameForm } from './library/ScallopFrameForm'
 import { TenonForm } from './library/TenonForm'
+import { TextForm } from './library/TextForm'
 import {
   OPENROUTER_API_KEY_STORAGE,
   buildSvgForSmoothing,
@@ -559,6 +560,17 @@ function GeneratorSettingsPanel({
   if (params.kind === 'dowelHole') {
     return (
       <DowelHoleForm
+        initialParams={params}
+        mode="edit"
+        nodeId={node.id}
+        onUpdate={onUpdate}
+      />
+    )
+  }
+
+  if (params.kind === 'text') {
+    return (
+      <TextForm
         initialParams={params}
         mode="edit"
         nodeId={node.id}

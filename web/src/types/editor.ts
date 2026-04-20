@@ -123,7 +123,7 @@ export interface CanvasNodeBase {
 
 // ---------- Generator types ----------
 
-export type GeneratorKind = 'tenon' | 'dowelHole' | 'scallopFrame'
+export type GeneratorKind = 'tenon' | 'dowelHole' | 'scallopFrame' | 'text'
 
 export interface TenonParams {
   kind: 'tenon'
@@ -159,7 +159,19 @@ export interface ScallopFrameParams {
   outputType: 'contour' | 'pocket'
 }
 
-export type GeneratorParams = TenonParams | DowelHoleParams | ScallopFrameParams
+export interface TextParams {
+  kind: 'text'
+  name: string
+  text: string
+  fontFamily: string
+  fontVariant: string
+  fontSizePt: number
+  align: 'start' | 'middle' | 'end'
+  lineHeight: number
+  outputType: 'contour' | 'pocket' | 'outline'
+}
+
+export type GeneratorParams = TenonParams | DowelHoleParams | ScallopFrameParams | TextParams
 
 export interface GeneratorMetadata {
   params: GeneratorParams

@@ -69,6 +69,10 @@ export interface EditorStore {
     pendingImport: PendingSvgImport | null
     importFocusRequest: ImportFocusRequest | null
     importStatus: ImportStatus | null
+    /** NodeId of a text generator whose content input should be focused by the Inspector. */
+    focusTextRequestId: string | null
+    /** NodeId of a text generator currently being edited inline on the canvas. */
+    editingTextNodeId: string | null
   }
   nodeVersion: number
   hoveredId: string | null
@@ -123,6 +127,10 @@ export interface EditorStore {
   ) => void
   clearImportFocusRequest: (requestId: number) => void
   setImportStatus: (status: ImportStatus | null) => void
+  requestFocusText: (nodeId: string) => void
+  consumeFocusTextRequest: () => void
+  startEditingText: (nodeId: string) => void
+  stopEditingText: () => void
 
   // Library tab
   leftPanelTab: 'layers' | 'library'
@@ -624,6 +632,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     pendingImport: null,
     importFocusRequest: null,
     importStatus: null,
+    focusTextRequestId: null,
+    editingTextNodeId: null,
   },
   nodeVersion: 0,
   hoveredId: null,
@@ -1395,6 +1405,19 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   // Library tab
   setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
 
+  requestFocusText: (nodeId) => set((state) => ({
+    ui: { ...state.ui, focusTextRequestId: nodeId },
+  })),
+  consumeFocusTextRequest: () => set((state) => ({
+    ui: { ...state.ui, focusTextRequestId: null },
+  })),
+  startEditingText: (nodeId) => set((state) => ({
+    ui: { ...state.ui, editingTextNodeId: nodeId },
+  })),
+  stopEditingText: () => set((state) => ({
+    ui: { ...state.ui, editingTextNodeId: null },
+  })),
+
   placeGenerator: (params, position) => {
     const { artboard, machiningSettings, nodesById, rootIds } = get()
     const resolved = normalizeGeneratorParams(resolveParamsAgainstTool(params, machiningSettings))
@@ -1415,6 +1438,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       engraveType = 'contour'
     } else if (resolved.kind === 'dowelHole' && resolved.matchToolDiameter) {
       engraveType = 'plunge'
+    } else if (resolved.kind === 'text') {
+      engraveType = resolved.outputType
     }
     for (const node of Object.values(pending.nodesById)) {
       node.cncMetadata = { ...node.cncMetadata, engraveType: engraveType as import('./types/editor').EngraveType }
@@ -1425,17 +1450,21 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ;(rootNode as GroupNode).generatorMetadata = { params: resolved }
     }
     get().stagePendingImport(pending)
-    get().placePendingImport(
-      position
-        ? getCenteredPlacement(position, pending.width, pending.height, artboard)
+    const placement = position
+      ? getCenteredPlacement(position, pending.width, pending.height, artboard)
+      : resolved.kind === 'text'
+        ? {
+            x: Math.max(0, (artboard.width - pending.width) / 2),
+            y: Math.max(0, (artboard.height - pending.height) / 2),
+          }
         : getAutoImportPlacement({
             artboard,
             nodesById,
             rootIds,
             width: pending.width,
             height: pending.height,
-          }),
-    )
+          })
+    get().placePendingImport(placement)
   },
 
   placeShape: (kind, position) => {
@@ -1512,6 +1541,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       engraveType = 'contour'
     } else if (resolved.kind === 'dowelHole' && resolved.matchToolDiameter) {
       engraveType = 'plunge'
+    } else if (resolved.kind === 'text') {
+      engraveType = resolved.outputType
     }
     const newChildren: Record<string, CanvasNode> = {}
     for (const [id, node] of Object.entries(pending.nodesById)) {
@@ -1523,13 +1554,15 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       }
     }
 
-    const autoGroupPatch = getAutoGeneratorGroupPatch(
-      existingGroup,
-      nodesById,
-      artboard,
-      nextGroupSize.width,
-      nextGroupSize.height,
-    )
+    const autoGroupPatch = resolved.kind === 'text'
+      ? { x: existingGroup.x, y: existingGroup.y }
+      : getAutoGeneratorGroupPatch(
+          existingGroup,
+          nodesById,
+          artboard,
+          nextGroupSize.width,
+          nextGroupSize.height,
+        )
 
     const updatedGroup: GroupNode = {
       ...existingGroup,

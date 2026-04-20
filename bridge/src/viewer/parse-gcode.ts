@@ -48,6 +48,7 @@ export interface ParsedProgram {
   totalDistance: number;
   events: ParsedEvent[];
   operationSpans: OperationSpan[];
+  previewOffset: { x: number; y: number };
 }
 
 export interface PlaybackSample {
@@ -66,7 +67,8 @@ export function parseGcodeProgram(
   const operationForLine = buildOperationLineMap(operationRanges);
   let modalCommand: "G0" | "G1" | "G2" | "G3" = "G0";
   let modalFeedrate: number | null = null;
-  let current = { x: 0, y: 0, z: 0 };
+  const previewOffset = parsePreviewOffset(gcode);
+  let current = { x: previewOffset.x, y: previewOffset.y, z: 0 };
   let totalDistance = 0;
   const segments: ParsedSegment[] = [];
   const events: ParsedEvent[] = [];
@@ -162,10 +164,10 @@ export function parseGcodeProgram(
       } else if (token === "G3" || token === "G03") {
         modalCommand = "G3";
       } else if (token.startsWith("X")) {
-        next.x = Number.parseFloat(token.slice(1));
+        next.x = Number.parseFloat(token.slice(1)) + previewOffset.x;
         hasMove = true;
       } else if (token.startsWith("Y")) {
-        next.y = Number.parseFloat(token.slice(1));
+        next.y = Number.parseFloat(token.slice(1)) + previewOffset.y;
         hasMove = true;
       } else if (token.startsWith("Z")) {
         next.z = Number.parseFloat(token.slice(1));
@@ -208,7 +210,29 @@ export function parseGcodeProgram(
     totalDistance,
     events,
     operationSpans: buildOperationSpans(segments, operationRanges),
+    previewOffset,
   };
+}
+
+function parsePreviewOffset(gcode: string): { x: number; y: number } {
+  for (const rawLine of gcode.split(/\r?\n/)) {
+    const commentStart = rawLine.indexOf(";");
+    if (commentStart < 0) continue;
+
+    const comment = rawLine.slice(commentStart + 1).trim();
+    const match = comment.match(
+      /^PREVIEW_OFFSET:\s*X\s+(-?\d+(?:\.\d+)?)(?:\s*,)?\s*Y\s+(-?\d+(?:\.\d+)?)/i,
+    );
+    if (!match) continue;
+
+    const x = Number.parseFloat(match[1]!);
+    const y = Number.parseFloat(match[2]!);
+    if (Number.isFinite(x) && Number.isFinite(y)) {
+      return { x, y };
+    }
+  }
+
+  return { x: 0, y: 0 };
 }
 
 export function sampleProgramAtDistance(
