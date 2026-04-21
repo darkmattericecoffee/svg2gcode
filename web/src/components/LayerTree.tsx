@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { SearchField } from '@heroui/react'
+import { Button, ButtonGroup, Dropdown, SearchField } from '@heroui/react'
 import { ChevronDown, ChevronRight, Font, Geo, GeoFill, LayoutCells, Sparkles } from '@gravity-ui/icons'
+import { Pin } from 'lucide-react'
 
-import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { AppIcon, Icons } from '../lib/icons'
-import { depthToColor, isGeometricallyOpen, normalizeEngraveType } from '../lib/cncVisuals'
+import { depthToColor } from '../lib/cncVisuals'
 import { computeCutOrder } from '../lib/cutOrder'
 import {
   assignLeafIdsToJob,
@@ -14,32 +14,23 @@ import {
   normalizeManualJobs,
   splitManualJobsAtCutIndex,
 } from '../lib/jobs'
+import {
+  buildLayerCncSummary,
+  getChildLayerPreviewMetadata,
+  getLayerPreviewVisualProps,
+  type LayerCncSummary,
+} from '../lib/layerTreePresentation'
 import { boundsToViewBox, getNodePreviewBounds } from '../lib/nodeBounds'
 import { useEditorStore } from '../store'
 import { CutOrderView } from './CutOrderView'
 import { EditorContextMenu } from './EditorContextMenu'
-import type { CanvasNode, GroupNode, LineNode, MachiningSettings } from '../types/editor'
-import type { NormalizedEngraveType } from '../lib/cncVisuals'
+import type { CanvasNode, CncMetadata, GroupNode, LineNode, MachiningSettings } from '../types/editor'
 
 function cn(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')
 }
 
 const LAYER_PREVIEW_SIZE = 24
-const DEPTH_EPSILON = 0.0001
-
-const ENGRAVE_LABEL: Record<NormalizedEngraveType, string> = {
-  contour: 'Contour',
-  pocket: 'Pocket',
-  plunge: 'Plunge',
-}
-
-interface LayerCncSummary {
-  depth: number | null
-  depthLabel: string
-  mode: NormalizedEngraveType | 'mixed'
-  modeLabel: string
-}
 
 // Build a flat ordered list of all rendered node IDs (depth-first), respecting
 // collapsed state and query filter. Used for shift-click and drag range selection.
@@ -60,65 +51,6 @@ function buildFlatList(
     }
   }
   return result
-}
-
-function collectLeafNodes(
-  node: CanvasNode,
-  nodesById: Record<string, CanvasNode>,
-): CanvasNode[] {
-  if (node.type !== 'group') return [node]
-
-  const childNodes = (node as GroupNode).childIds.flatMap((childId) => {
-    const child = nodesById[childId]
-    return child ? collectLeafNodes(child, nodesById) : []
-  })
-
-  return childNodes.length > 0 ? childNodes : [node]
-}
-
-function inferEngraveMode(node: CanvasNode, nodesById: Record<string, CanvasNode>): NormalizedEngraveType {
-  const metadataMode = normalizeEngraveType(resolveNodeCncMetadata(node, nodesById).engraveType)
-  if (metadataMode) return metadataMode
-  return isGeometricallyOpen(node) ? 'contour' : 'pocket'
-}
-
-function formatDepth(depth: number): string {
-  return `${Number(depth.toFixed(2))} mm`
-}
-
-export function buildLayerCncSummary(
-  node: CanvasNode,
-  nodesById: Record<string, CanvasNode>,
-  defaultDepth: number,
-): LayerCncSummary {
-  const leafNodes = collectLeafNodes(node, nodesById)
-  const depths = new Set<string>()
-  const modes = new Set<NormalizedEngraveType>()
-  let firstDepth: number | null = null
-  let firstMode: NormalizedEngraveType | null = null
-
-  leafNodes.forEach((leaf) => {
-    const metadata = resolveNodeCncMetadata(leaf, nodesById)
-    const depth = metadata.cutDepth ?? defaultDepth
-    const mode = inferEngraveMode(leaf, nodesById)
-
-    if (firstDepth === null) firstDepth = depth
-    if (firstMode === null) firstMode = mode
-
-    depths.add((Math.round(depth / DEPTH_EPSILON) * DEPTH_EPSILON).toFixed(4))
-    modes.add(mode)
-  })
-
-  const mixedDepth = depths.size > 1
-  const mixedMode = modes.size > 1
-  const mode: NormalizedEngraveType | 'mixed' = mixedMode ? 'mixed' : (firstMode ?? 'pocket')
-
-  return {
-    depth: mixedDepth ? null : firstDepth ?? defaultDepth,
-    depthLabel: mixedDepth ? 'Mixed depth' : formatDepth(firstDepth ?? defaultDepth),
-    mode,
-    modeLabel: mode === 'mixed' ? 'Mixed' : ENGRAVE_LABEL[mode],
-  }
 }
 
 function FillModeIcon({
@@ -230,29 +162,6 @@ function nodeTransform(node: CanvasNode): string | undefined {
   return transforms.length > 0 ? transforms.join(' ') : undefined
 }
 
-function paintOrUndefined(value?: string): string | undefined {
-  const normalized = value?.trim()
-  if (!normalized || normalized === 'none') return undefined
-  return normalized
-}
-
-function shapePaint(node: Exclude<CanvasNode, GroupNode>): {
-  fill: string
-  stroke: string
-  strokeWidth: number
-} {
-  const fill = paintOrUndefined('fill' in node ? node.fill : undefined)
-  const stroke = paintOrUndefined('stroke' in node ? node.stroke : undefined)
-  const strokeWidth = 'strokeWidth' in node ? node.strokeWidth : 1
-  const fallbackStroke = fill ? 'none' : 'currentColor'
-
-  return {
-    fill: fill ?? 'none',
-    stroke: stroke ?? fallbackStroke,
-    strokeWidth: Boolean(stroke) || !fill ? Math.max(strokeWidth || 1, 1) : 0,
-  }
-}
-
 function linePoints(points: number[]): string {
   const pairs: string[] = []
   for (let index = 0; index + 1 < points.length; index += 2) {
@@ -261,22 +170,27 @@ function linePoints(points: number[]): string {
   return pairs.join(' ')
 }
 
-function renderPreviewNode(node: CanvasNode, nodesById: Record<string, CanvasNode>) {
+function renderPreviewNode(
+  node: CanvasNode,
+  nodesById: Record<string, CanvasNode>,
+  parentCncMetadata?: CncMetadata,
+) {
   const transform = nodeTransform(node)
   const opacity = node.opacity === 1 ? undefined : node.opacity
 
   if (node.type === 'group') {
+    const childCncMetadata = getChildLayerPreviewMetadata(node, parentCncMetadata)
     return (
       <g key={node.id} transform={transform} opacity={opacity}>
         {(node as GroupNode).childIds.map((childId) => {
           const child = nodesById[childId]
-          return child ? renderPreviewNode(child, nodesById) : null
+          return child ? renderPreviewNode(child, nodesById, childCncMetadata) : null
         })}
       </g>
     )
   }
 
-  const paint = shapePaint(node)
+  const paint = getLayerPreviewVisualProps(node, parentCncMetadata)
   const sharedProps = {
     transform,
     opacity,
@@ -683,28 +597,47 @@ export function LayerTree() {
             </p>
           )}
           {jobsEnabled && selectedLeafIdsForJobs.length > 0 && (
-            <div className="mt-3 flex items-center gap-2">
-              <span className="text-[11px] text-muted-foreground">
-                {selectedLeafIdsForJobs.length} selected →
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <span className="min-w-0 text-[11px] text-muted-foreground">
+                {selectedLeafIdsForJobs.length} selected
               </span>
-              <select
-                className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                value=""
-                onChange={(e) => {
-                  if (e.target.value) assignSelectionToJob(e.target.value)
-                  e.target.value = ''
-                }}
-              >
-                <option value="" disabled>
-                  Assign to job…
-                </option>
-                <option value="new">＋ New job</option>
-                {displayedJobs.map((j, i) => (
-                  <option key={j.id} value={j.id}>
-                    Job {i + 1} — {j.name}
-                  </option>
-                ))}
-              </select>
+              <ButtonGroup variant="tertiary" aria-label="Assign selection to a job">
+                <Button
+                  className="h-8 px-2.5 text-xs"
+                  onPress={() => assignSelectionToJob('new')}
+                >
+                  <Pin className="h-3.5 w-3.5" />
+                  Add to new job
+                </Button>
+                <Dropdown>
+                  <Button
+                    isIconOnly
+                    aria-label="Assign selection to an existing job"
+                    className="h-8 min-w-8 px-2"
+                  >
+                    <ButtonGroup.Separator />
+                    <ChevronDown className="h-4 w-4" />
+                  </Button>
+                  <Dropdown.Popover placement="bottom end">
+                    <Dropdown.Menu
+                      aria-label="Existing jobs"
+                      onAction={(key) => assignSelectionToJob(String(key))}
+                    >
+                      {displayedJobs.length > 0 ? (
+                        displayedJobs.map((job, index) => (
+                          <Dropdown.Item key={job.id} id={job.id} textValue={`Job ${index + 1} ${job.name}`}>
+                            Job {index + 1} — {job.name}
+                          </Dropdown.Item>
+                        ))
+                      ) : (
+                        <Dropdown.Item id="no-jobs" isDisabled textValue="No existing jobs">
+                          No existing jobs yet
+                        </Dropdown.Item>
+                      )}
+                    </Dropdown.Menu>
+                  </Dropdown.Popover>
+                </Dropdown>
+              </ButtonGroup>
             </div>
           )}
           {jobsEnabled && manualJobs !== null && (

@@ -48,6 +48,8 @@ interface ImportSvgOptions {
   artboardHeight: number
   fileName: string
   svgText: string
+  /** Default cut depth (mm) applied to leaf shapes that don't specify one. */
+  defaultCutDepth?: number
 }
 
 interface PathMeasure {
@@ -780,6 +782,7 @@ export function importSvgToScene({
   artboardHeight,
   fileName,
   svgText,
+  defaultCutDepth,
 }: ImportSvgOptions): PendingSvgImport {
   const parsedDocument = new DOMParser().parseFromString(svgText, 'image/svg+xml')
   const parserError = parsedDocument.querySelector('parsererror')
@@ -827,7 +830,11 @@ export function importSvgToScene({
     const nodeId = createNodeId(context.idPrefix, tagName, nodeIndex)
     const opacity = parseOpacity(getStyleValue(element, styleMap, 'opacity', stylesheet))
     const visible = isVisible(element, styleMap, stylesheet)
-    const cncMetadata = readCncMetadata(element)
+    const rawCncMetadata = readCncMetadata(element)
+    const isGroupLike = tagName === 'svg' || tagName === 'g'
+    const cncMetadata = !isGroupLike && defaultCutDepth !== undefined && rawCncMetadata?.cutDepth === undefined
+      ? { ...(rawCncMetadata ?? {}), cutDepth: defaultCutDepth }
+      : rawCncMetadata
     const centerlineMetadata = readCenterlineMetadata(element)
     const renderHint = readRenderHint(element)
     nodeIndex += 1

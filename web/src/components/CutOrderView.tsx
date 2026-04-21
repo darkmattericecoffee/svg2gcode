@@ -2,7 +2,8 @@ import { useState } from 'react'
 import type { CanvasNode } from '../types/editor'
 import type { CutOrderResult } from '../lib/cutOrder'
 import type { ComputedJob } from '../lib/jobs'
-import { buildLayerCncSummary, LayerCncSummaryTag, LayerPreview } from './LayerTree'
+import { buildLayerCncSummary } from '../lib/layerTreePresentation'
+import { LayerCncSummaryTag, LayerPreview } from './LayerTree'
 
 function cn(...classes: (string | boolean | undefined | null)[]) {
   return classes.filter(Boolean).join(' ')

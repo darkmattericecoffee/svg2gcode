@@ -1,7 +1,8 @@
 import paper from 'paper'
 
-import { isGeometricallyOpen, isOpenPathNode, resolveEngraveType, type NormalizedEngraveType } from './cncVisuals'
-import type { CanvasNode } from '../types/editor'
+import { isGeometricallyOpen, isOpenPathNode, resolvePreviewEngraveMode, type NormalizedEngraveType } from './cncVisuals'
+import type { CanvasNode, CncMetadata } from '../types/editor'
+import { mergeCncMetadata } from './cncMetadata'
 
 type AreaNode = Extract<CanvasNode, { type: 'rect' | 'circle' | 'path' | 'line' }>
 
@@ -705,19 +706,22 @@ export function buildDepthPreviewPlan(
   const collectNode = (
     nodeId: string,
     rootId: string,
-    inheritedDepth: number | null,
+    inheritedMetadata: CncMetadata | undefined,
     ancestorTransforms: LocalTransform[],
-    inheritedEngraveType: NormalizedEngraveType | null,
   ): boolean => {
     const node = nodesById[nodeId]
     if (!node || !node.visible) {
       return false
     }
 
-    const effectiveDepth = node.cncMetadata?.cutDepth ?? inheritedDepth ?? fallbackDepth
-    const effectiveMode = node.cncMetadata?.engraveType
-      ? resolveEngraveType(node.cncMetadata.engraveType, 'pocket')
-      : (inheritedEngraveType ?? 'pocket')
+    const effectiveMetadata = mergeCncMetadata(node.cncMetadata, inheritedMetadata)
+    const effectiveDepth = effectiveMetadata?.cutDepth ?? fallbackDepth
+    const resolvedMode = resolvePreviewEngraveMode(
+      node,
+      node.cncMetadata,
+      inheritedMetadata,
+      'pocket',
+    )
     const localTransform = toLocalTransform(node)
 
     if (node.type === 'group') {
@@ -728,9 +732,8 @@ export function buildDepthPreviewPlan(
         subtreeHasDepth = collectNode(
           childId,
           rootId,
-          effectiveDepth,
+          effectiveMetadata,
           nextAncestorTransforms,
-          effectiveMode,
         ) || subtreeHasDepth
       }
 
@@ -748,13 +751,8 @@ export function buildDepthPreviewPlan(
     const transforms = [localTransform, ...ancestorTransforms.slice().reverse()]
     interactiveRootIds.add(rootId)
 
-    // Stroke-only paths (open paths, or closed paths with no fill) and short lines
-    // should be treated as stroke shapes, not area fills — unless the user
-    // explicitly set a fillable engraveType on the node and the path is closed.
-    const explicitFillOnNode =
-      node.cncMetadata?.engraveType === 'pocket' || node.cncMetadata?.engraveType === 'raster'
-    const treatAsStroke =
-      isGeometricallyOpen(node) || (isOpenPathNode(node) && !explicitFillOnNode)
+    const isClosedStrokeOnly = !isGeometricallyOpen(node) && isOpenPathNode(node)
+    const treatAsStroke = isGeometricallyOpen(node) || (isClosedStrokeOnly && resolvedMode === 'contour')
     if (node.type === 'path' && treatAsStroke) {
       const s = getScope()
       s.activate()
@@ -797,7 +795,7 @@ export function buildDepthPreviewPlan(
         const point = applyTransformsToPoint(value, node.points[index + 1], transforms)
         return [point]
       })
-      if (effectiveMode === 'contour') {
+      if (resolvedMode === 'contour') {
         strokeShapes.push({
           depth: effectiveDepth,
           sourceNodeId: node.id,
@@ -816,11 +814,11 @@ export function buildDepthPreviewPlan(
       )
 
       if (outlinedPath) {
-        const key = `${effectiveDepth}:${effectiveMode}`
+        const key = `${effectiveDepth}:${resolvedMode}`
         const bucket = areaShapesByKey.get(key) ?? []
         bucket.push({
           depth: effectiveDepth,
-          mode: effectiveMode,
+          mode: resolvedMode,
           sourceNodeId: node.id,
           node: {
             id: `${node.id}__stroke-outline`,
@@ -850,11 +848,6 @@ export function buildDepthPreviewPlan(
       return true
     }
 
-    // Closed paths with no fill (stroke-only) should be treated as outlines,
-    // not as fillable area shapes — unless the user explicitly chose a
-    // fillable mode on the node.
-    const resolvedMode =
-      isOpenPathNode(node) && !explicitFillOnNode ? 'contour' as NormalizedEngraveType : effectiveMode
     const key = `${effectiveDepth}:${resolvedMode}`
     const bucket = areaShapesByKey.get(key) ?? []
 
@@ -882,7 +875,7 @@ export function buildDepthPreviewPlan(
   }
 
   for (const rootId of rootIds) {
-    collectNode(rootId, rootId, null, [], null)
+    collectNode(rootId, rootId, undefined, [])
   }
 
   // Merge contour bands into pocket buckets at the same depth so they

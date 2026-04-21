@@ -1465,6 +1465,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       artboardHeight: artboard.height,
       fileName: resolved.name,
       svgText,
+      defaultCutDepth: machiningSettings.defaultDepthMm,
     })
     applyGeneratorRenderHints(pending, resolved)
     // Determine effective engraveType:
@@ -1557,6 +1558,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       artboardHeight: artboard.height,
       fileName: resolved.name,
       svgText,
+      defaultCutDepth: machiningSettings.defaultDepthMm,
     })
     applyGeneratorRenderHints(pending, resolved)
 
@@ -1980,3 +1982,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     }))
   },
 }))
+
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  ;(window as unknown as { useEditorStore: typeof useEditorStore }).useEditorStore = useEditorStore
+}

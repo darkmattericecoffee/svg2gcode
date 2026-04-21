@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Geo, GeoFill } from '@gravity-ui/icons'
-import { Button, Slider, Tabs } from '@heroui/react'
+import { Button, Slider } from '@heroui/react'
 
 import { resolveNodeCncMetadata } from '../lib/cncMetadata'
 import { depthToColor, isGeometricallyOpen, normalizeEngraveType } from '../lib/cncVisuals'
@@ -275,6 +275,7 @@ function DepthEditor({
 }) {
   const displayDepth = analysis.effectiveDepth ?? defaultDepth
   const availableTypes: NormalizedEngraveType[] = analysis.allOpenPaths ? ['contour'] : ENGRAVE_TYPES
+  const depthIsZero = !analysis.isMixedDepth && displayDepth <= 0
 
   return (
     <div className="space-y-4">
@@ -287,12 +288,18 @@ function DepthEditor({
 
       <div className="space-y-1.5">
         <p className="text-xs text-muted-foreground">Part fill</p>
-        <FillModeTabs
-          availableTypes={availableTypes}
-          selectedType={analysis.isMixedType ? null : analysis.effectiveType}
-          onTypeChange={(value) => onTypeChange(value)}
-        />
-        {analysis.isMixedType && (
+        {depthIsZero ? (
+          <div className="rounded-md border border-dashed border-border bg-content1 px-3 py-3 text-xs text-muted-foreground">
+            Add depth to choose cut type
+          </div>
+        ) : (
+          <FillModeTabs
+            availableTypes={availableTypes}
+            selectedType={analysis.isMixedType ? null : analysis.effectiveType}
+            onTypeChange={(value) => onTypeChange(value)}
+          />
+        )}
+        {!depthIsZero && analysis.isMixedType && (
           <p className="text-xs text-muted-foreground/70">Multiple fill types selected</p>
         )}
       </div>
@@ -378,14 +385,20 @@ function CutDepthGroupsList({
           {/* Part fill */}
           <div className="space-y-1.5">
             <p className="text-xs text-muted-foreground">Part fill</p>
-            <FillModeTabs
-              availableTypes={ENGRAVE_TYPES}
-              selectedType={group.mixedFill ? null : group.fillMode ?? null}
-              onTypeChange={(value) => {
-                if (value) onFillModeChange(group.nodeIds, value)
-              }}
-            />
-            {group.mixedFill && (
+            {group.cutDepth <= 0 ? (
+              <div className="rounded-md border border-dashed border-border bg-content1 px-3 py-2 text-xs text-muted-foreground">
+                Add depth to choose cut type
+              </div>
+            ) : (
+              <FillModeTabs
+                availableTypes={ENGRAVE_TYPES}
+                selectedType={group.mixedFill ? null : group.fillMode ?? null}
+                onTypeChange={(value) => {
+                  if (value) onFillModeChange(group.nodeIds, value)
+                }}
+              />
+            )}
+            {group.cutDepth > 0 && group.mixedFill && (
               <p className="text-xs text-muted-foreground/70">Mixed fill types.</p>
             )}
           </div>
@@ -438,28 +451,37 @@ function FillModeTabs({
   onTypeChange: (value: EngraveType | undefined) => void
 }) {
   return (
-    <Tabs
-      className="w-full"
-      selectedKey={selectedType ?? undefined}
-      onSelectionChange={(key) => onTypeChange(String(key) as EngraveType)}
+    <div
+      role="group"
+      aria-label="Part fill modes"
+      className="grid w-full rounded-full bg-content2 p-1"
+      style={{ gridTemplateColumns: `repeat(${availableTypes.length}, minmax(0, 1fr))` }}
     >
-      <Tabs.ListContainer className="w-full">
-        <Tabs.List
-          aria-label="Part fill modes"
-          className="w-full rounded-full bg-content2 p-1 *:min-w-0 *:flex-1 *:h-7 *:px-2.5 *:text-xs *:font-medium *:text-white/70 *:data-[selected=true]:text-white"
-        >
-          {availableTypes.map((type) => (
-            <Tabs.Tab key={type} id={type}>
-              <span className="flex items-center justify-center gap-1.5 text-current">
-                <FillModeIcon mode={type} />
-                <span>{ENGRAVE_LABEL[type]}</span>
-              </span>
-              <Tabs.Indicator className="rounded-full bg-primary" />
-            </Tabs.Tab>
-          ))}
-        </Tabs.List>
-      </Tabs.ListContainer>
-    </Tabs>
+      {availableTypes.map((type) => {
+        const isSelected = selectedType === type
+
+        return (
+          <button
+            key={type}
+            type="button"
+            aria-pressed={isSelected}
+            className={[
+              'flex h-7 min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors outline-none',
+              isSelected
+                ? 'bg-primary text-white'
+                : 'text-white/70 hover:bg-white/8 hover:text-white focus-visible:bg-white/8 focus-visible:text-white',
+            ].join(' ')}
+            onClick={() => {
+              if (isSelected) return
+              onTypeChange(type)
+            }}
+          >
+            <FillModeIcon mode={type} />
+            <span>{ENGRAVE_LABEL[type]}</span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

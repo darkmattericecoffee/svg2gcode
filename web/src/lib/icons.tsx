@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ComponentType, SVGProps } from 'react'
 
-import { LocationArrow, MinusShape, MinusShapeFill } from '@gravity-ui/icons'
+import { LocationArrow, TextIndent } from '@gravity-ui/icons'
 import ArrowChevronDownIcon from '@gravity-ui/icons/esm/ArrowChevronDown.js'
 import ArrowChevronRightIcon from '@gravity-ui/icons/esm/ArrowChevronRight.js'
 import ArrowRotateLeftIcon from '@gravity-ui/icons/esm/ArrowRotateLeft.js'
@@ -30,18 +30,6 @@ import { Pipette } from 'lucide-react'
 
 export type AppIconComponent = ComponentType<SVGProps<SVGSVGElement>>
 
-/** Icon representing an engraved / routed pocket in wood — outer frame + inset filled area with a top-shadow arc. */
-const EngravePreviewIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 16 16" fill="none" {...props}>
-    {/* Wood surface border */}
-    <rect x="1.5" y="1.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.3" />
-    {/* Routed-out pocket */}
-    <rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" fillOpacity="0.75" />
-    {/* Shadow arc suggesting depth / inset */}
-    <path d="M4.5 7 Q8 5 11.5 7" stroke="currentColor" strokeOpacity="0.28" strokeWidth="1.3" strokeLinecap="round" />
-  </svg>
-)
-
 export const Icons = {
   alignBottom: ObjectAlignBottomIcon,
   alignCenterHorizontal: ObjectAlignCenterHorizontalIcon,
@@ -55,7 +43,6 @@ export const Icons = {
   redo: ArrowRotateRightIcon,
   close: CircleXmarkIcon,
   cursor: LocationArrow,
-  engravePreview: EngravePreviewIcon,
   export: ArrowUpFromSquareIcon,
   eye: EyeIcon,
   eyeOff: EyeSlashIcon,
@@ -67,11 +54,10 @@ export const Icons = {
   lock: LockIcon,
   lockOpen: LockOpenIcon,
   minus: MinusIcon,
-  minusShape: MinusShape,
-  minusShapeFill: MinusShapeFill,
   picture: PictureIcon,
   pipette: Pipette,
   plus: PlusIcon,
+  textIndent: TextIndent,
 } satisfies Record<string, AppIconComponent>
 
 export function AppIcon({

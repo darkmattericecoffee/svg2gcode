@@ -16,8 +16,8 @@ import {
   getCncVisualOverrides,
   getEngravePreviewFill,
   getEngravePreviewStroke,
-  isOpenPathNode,
-  normalizeEngraveType,
+  resolvePreviewEngraveMode,
+  shouldUseToolDiameterStrokePreview,
 } from './lib/cncVisuals'
 import { mergeCncMetadata } from './lib/cncMetadata'
 import { useSelection } from './hooks/useSelection'
@@ -167,16 +167,24 @@ function SvgPathNode({
   onDragMove,
   onDragEnd,
 }: SharedShapeProps & { node: PathNode }) {
+  const effectiveCncMetadata = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
+  const resolvedMode = resolvePreviewEngraveMode(node, node.cncMetadata, parentCncMetadata)
   const cncOverrides = showCncOverrides !== false
     ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
     : {}
-  const isOpenPath = toolDiameter != null && isOpenPathNode(node)
-  const useCncStroke = isOpenPath && showCncOverrides !== false
+  const usesToolpathStrokePreview = toolDiameter != null && shouldUseToolDiameterStrokePreview(node, resolvedMode)
+  const useCncStroke = usesToolpathStrokePreview
+    && showCncOverrides !== false
+    && effectiveCncMetadata?.cutDepth !== undefined
   const cncStrokeWidth = toolDiameter
   const baseStrokeWidth = useCncStroke ? cncStrokeWidth! : node.strokeWidth
   const baseStroke = useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke
   const visualProps = Object.assign(
-    { fill: outlineOnly ? '' : node.fill, stroke: baseStroke, strokeWidth: baseStrokeWidth },
+    {
+      fill: outlineOnly ? '' : (useCncStroke ? undefined : node.fill),
+      stroke: baseStroke,
+      strokeWidth: baseStrokeWidth,
+    },
     cncOverrides,
   )
   if (outlineOnly && !cncOverrides.fill) {
@@ -201,8 +209,7 @@ function SvgPathNode({
     : undefined
 
   // Plunge points: render a circle showing the tool diameter footprint
-  const effectiveMeta = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
-  const isPlunge = normalizeEngraveType(effectiveMeta?.engraveType) === 'plunge'
+  const isPlunge = resolvedMode === 'plunge'
   const renderHint = node.renderHint?.kind === 'plungeCircle' ? node.renderHint : undefined
   const plungeDiameter = renderHint?.diameter ?? toolDiameter ?? 0
   const plungeRadius = plungeDiameter / 2
@@ -544,11 +551,21 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   }
 
   if (node.type === 'rect') {
-    const cncOverrides = showCncOverrides
+    const effectiveCncMetadata = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
+    const resolvedMode = resolvePreviewEngraveMode(node, node.cncMetadata, parentCncMetadata)
+    const cncOverrides = showCncOverrides !== false
       ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
+    const useCncStroke = toolDiameter != null
+      && showCncOverrides !== false
+      && effectiveCncMetadata?.cutDepth !== undefined
+      && shouldUseToolDiameterStrokePreview(node, resolvedMode)
     const visualProps: { fill?: string; stroke?: string; strokeWidth?: number } = Object.assign(
-      { fill: outlineOnly ? '' : node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
+      {
+        fill: outlineOnly ? '' : (useCncStroke ? undefined : node.fill),
+        stroke: useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke,
+        strokeWidth: useCncStroke ? toolDiameter : node.strokeWidth,
+      },
       cncOverrides,
     )
     if (outlineOnly && !cncOverrides.fill) {
@@ -586,6 +603,7 @@ export const ShapeRenderer = memo(function ShapeRenderer({
         listening={listening}
         hitFunc={rectStrokeOnlyHitFunc}
         hitStrokeWidth={activeInteractionMode === 'direct' ? 12 : undefined}
+        strokeScaleEnabled={useCncStroke ? false : undefined}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}
@@ -601,11 +619,21 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   }
 
   if (node.type === 'circle') {
-    const cncOverrides = showCncOverrides
+    const effectiveCncMetadata = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
+    const resolvedMode = resolvePreviewEngraveMode(node, node.cncMetadata, parentCncMetadata)
+    const cncOverrides = showCncOverrides !== false
       ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
+    const useCncStroke = toolDiameter != null
+      && showCncOverrides !== false
+      && effectiveCncMetadata?.cutDepth !== undefined
+      && shouldUseToolDiameterStrokePreview(node, resolvedMode)
     const visualProps = Object.assign(
-      { fill: node.fill, stroke: node.stroke, strokeWidth: node.strokeWidth },
+      {
+        fill: useCncStroke ? undefined : node.fill,
+        stroke: useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke,
+        strokeWidth: useCncStroke ? toolDiameter : node.strokeWidth,
+      },
       cncOverrides,
     )
     if (commonProps.isSelected) {
@@ -638,6 +666,7 @@ export const ShapeRenderer = memo(function ShapeRenderer({
         listening={listening}
         hitFunc={circleStrokeOnlyHitFunc}
         hitStrokeWidth={activeInteractionMode === 'direct' ? 12 : undefined}
+        strokeScaleEnabled={useCncStroke ? false : undefined}
         {...visualProps}
         onMouseDown={onPointerDown}
         onTouchStart={onPointerDown}
@@ -653,11 +682,15 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   }
 
   if (node.type === 'line') {
-    const cncOverrides = showCncOverrides
+    const effectiveCncMetadata = mergeCncMetadata(node.cncMetadata, parentCncMetadata)
+    const resolvedMode = resolvePreviewEngraveMode(node, node.cncMetadata, parentCncMetadata)
+    const cncOverrides = showCncOverrides !== false
       ? getCncVisualOverrides(node, node.cncMetadata, parentCncMetadata)
       : {}
-    const isOpenPath = toolDiameter != null && isOpenPathNode(node)
-    const useCncStroke = isOpenPath && showCncOverrides
+    const useCncStroke = toolDiameter != null
+      && showCncOverrides !== false
+      && effectiveCncMetadata?.cutDepth !== undefined
+      && shouldUseToolDiameterStrokePreview(node, resolvedMode)
     const cncStrokeWidth = toolDiameter
     const baseStrokeWidth = useCncStroke ? cncStrokeWidth! : node.strokeWidth
     const baseStroke = useCncStroke && !node.stroke ? 'rgba(30, 20, 10, 0.65)' : node.stroke
@@ -665,7 +698,7 @@ export const ShapeRenderer = memo(function ShapeRenderer({
       {
         stroke: baseStroke,
         strokeWidth: baseStrokeWidth,
-        fill: node.fill,
+        fill: useCncStroke ? undefined : node.fill,
         lineCap: useCncStroke ? 'round' : node.lineCap,
         lineJoin: useCncStroke ? 'round' : node.lineJoin,
       },

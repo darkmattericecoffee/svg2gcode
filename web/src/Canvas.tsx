@@ -448,8 +448,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
   const [isPanning, setIsPanning] = useState(false)
   const [panToolActive, setPanToolActive] = useState(false)
   const [showOutlines, setShowOutlines] = useState(true)
-  const [showEngravePreviewState, setShowEngravePreview] = useState(false)
-  const showEngravePreview = forceEngravePreview || showEngravePreviewState
+  const showEngravePreview = forceEngravePreview
   const [isZoomEditing, setIsZoomEditing] = useState(false)
   const [zoomDraft, setZoomDraft] = useState('')
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
@@ -935,9 +934,11 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     })
     dragStartPositions.current = positions
     pushHistory()
-    isDuplicateDragRef.current = isAltKeyDownRef.current
-    if (isDuplicateDragRef.current) {
-      duplicateInPlace()
+    if (!isDuplicateDragRef.current) {
+      isDuplicateDragRef.current = isAltKeyDownRef.current
+      if (isDuplicateDragRef.current) {
+        duplicateInPlace()
+      }
     }
     clearSnapGuides()
   }, [clearSnapGuides, duplicateInPlace, pushHistory, selectedIds])
@@ -1665,26 +1666,14 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
           </ToolbarTooltip>
 
           {/* Outlines toggle */}
-          <ToolbarTooltip label="Depth Lines">
+          <ToolbarTooltip label="Show Depth">
             <button
               type="button"
               className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition ${showOutlines ? 'bg-white/[0.14] text-white' : 'text-white/75 hover:text-white'}`}
               onClick={() => setShowOutlines((v) => !v)}
-              title="Depth Lines - show colored depth lines"
+              title="Show Depth - show colored depth lines"
             >
-              <AppIcon icon={showOutlines ? Icons.minusShapeFill : Icons.minusShape} className="h-5 w-5" />
-            </button>
-          </ToolbarTooltip>
-
-          {/* Engrave preview toggle */}
-          <ToolbarTooltip label="Engrave Preview">
-            <button
-              type="button"
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition ${showEngravePreview ? 'bg-white/[0.14] text-white' : 'text-white/75 hover:text-white'}`}
-              onClick={() => setShowEngravePreview((v) => !v)}
-              title="Engrave preview — simulates routed pockets on wood"
-            >
-              <AppIcon icon={Icons.engravePreview} className="h-5 w-5" />
+              <AppIcon icon={Icons.textIndent} className="h-5 w-5 rotate-90" />
             </button>
           </ToolbarTooltip>
 

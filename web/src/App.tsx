@@ -213,6 +213,7 @@ function App() {
         artboardHeight: artboard.height,
         fileName: file.name,
         svgText,
+        defaultCutDepth: machiningSettings.defaultDepthMm,
       })
 
       // Restore project metadata if this is an Engrav project file

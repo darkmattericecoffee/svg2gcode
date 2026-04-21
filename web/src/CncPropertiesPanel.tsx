@@ -124,27 +124,33 @@ export function CncPropertiesPanel() {
         <label className="block text-xs font-medium text-stone-600">
           Engrave Type
         </label>
-        <div className="flex gap-1.5">
-          {availableEngraveTypes.map((type) => {
-            const isActive = normalizeEngraveType(representativeMeta.engraveType) === type
-            return (
-              <Button
-                key={type}
-                variant={isActive ? 'primary' : 'outline'}
-                className={
-                  isActive
-                    ? 'border-amber-700 bg-amber-700 text-white text-xs'
-                    : 'border-stone-400 bg-white/60 text-stone-700 text-xs'
-                }
-                onPress={() => {
-                  applyAll({ engraveType: isActive ? undefined : type })
-                }}
-              >
-                {ENGRAVE_LABEL[type]}
-              </Button>
-            )
-          })}
-        </div>
+        {!representativeMeta.cutDepth || representativeMeta.cutDepth <= 0 ? (
+          <div className="rounded-md border border-dashed border-stone-300 bg-stone-50 px-3 py-2 text-xs text-stone-500">
+            Add depth to choose cut type
+          </div>
+        ) : (
+          <div className="flex gap-1.5">
+            {availableEngraveTypes.map((type) => {
+              const isActive = normalizeEngraveType(representativeMeta.engraveType) === type
+              return (
+                <Button
+                  key={type}
+                  variant={isActive ? 'primary' : 'outline'}
+                  className={
+                    isActive
+                      ? 'border-amber-700 bg-amber-700 text-white text-xs'
+                      : 'border-stone-400 bg-white/60 text-stone-700 text-xs'
+                  }
+                  onPress={() => {
+                    applyAll({ engraveType: isActive ? undefined : type })
+                  }}
+                >
+                  {ENGRAVE_LABEL[type]}
+                </Button>
+              )
+            })}
+          </div>
+        )}
 
         {/* Engrave type visual legend */}
         <div className="grid grid-cols-2 gap-1 text-xs text-stone-500">

@@ -1,5 +1,5 @@
 import type { CanvasNode, CncMetadata, EngraveType } from '../types/editor'
-import { mergeCncMetadata } from './cncMetadata'
+import { mergeCncMetadata, resolveNodeCncMetadata } from './cncMetadata'
 
 export const MAX_CUT_DEPTH = 20
 
@@ -68,6 +68,52 @@ export function resolveEngraveType(
   return normalizeEngraveType(type) ?? fallback
 }
 
+function resolveNormalizedPreviewEngraveMode(
+  node: CanvasNode,
+  normalizedType: NormalizedEngraveType | undefined,
+  fallback: NormalizedEngraveType = 'pocket',
+): NormalizedEngraveType {
+  if (isGeometricallyOpen(node)) {
+    return 'contour'
+  }
+
+  return normalizedType ?? fallback
+}
+
+export function resolvePreviewEngraveMode(
+  node: CanvasNode,
+  cncMetadata?: CncMetadata,
+  parentCncMetadata?: CncMetadata,
+  fallback: NormalizedEngraveType = 'pocket',
+): NormalizedEngraveType {
+  const effectiveMeta = mergeCncMetadata(cncMetadata, parentCncMetadata)
+  return resolveNormalizedPreviewEngraveMode(
+    node,
+    normalizeEngraveType(effectiveMeta?.engraveType),
+    fallback,
+  )
+}
+
+export function resolveNodePreviewEngraveMode(
+  node: CanvasNode,
+  nodesById: Record<string, CanvasNode>,
+  fallback: NormalizedEngraveType = 'pocket',
+): NormalizedEngraveType {
+  const effectiveMeta = resolveNodeCncMetadata(node, nodesById)
+  return resolveNormalizedPreviewEngraveMode(
+    node,
+    normalizeEngraveType(effectiveMeta.engraveType),
+    fallback,
+  )
+}
+
+export function shouldUseToolDiameterStrokePreview(
+  node: CanvasNode,
+  resolvedMode: NormalizedEngraveType,
+): boolean {
+  return resolvedMode === 'contour'
+}
+
 export function getCncVisualOverrides(
   node: CanvasNode,
   cncMetadata?: CncMetadata,
@@ -77,22 +123,12 @@ export function getCncVisualOverrides(
 
   if (!effectiveMeta) return {}
 
-  const { cutDepth, engraveType } = effectiveMeta
+  const { cutDepth } = effectiveMeta
 
   if (cutDepth === undefined || cutDepth === null) return {}
 
   const ratio = Math.min(1, Math.max(0, cutDepth / MAX_CUT_DEPTH))
-  // Honor an explicit engraveType set on the node itself (user choice).
-  // Only fall back to the open-path heuristic when the type was inherited
-  // or unset — geometrically open paths still can't be filled, so they stay
-  // contour regardless.
-  const explicitOnNode = cncMetadata?.engraveType !== undefined
-  const forceContour = isGeometricallyOpen(node) || (!explicitOnNode && isOpenPathNode(node))
-  const type = engraveType === 'plunge'
-    ? 'plunge' as const
-    : forceContour
-      ? 'contour'
-      : resolveEngraveType(engraveType, 'contour')
+  const type = resolvePreviewEngraveMode(node, cncMetadata, parentCncMetadata, 'pocket')
 
   if (type === 'plunge') {
     return {
