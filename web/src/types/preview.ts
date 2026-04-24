@@ -5,7 +5,7 @@ import type { MaterialPreset } from '../lib/materialPresets'
 import type { RouterBitShape } from './editor'
 
 export type CameraType = 'perspective' | 'orthographic'
-export type ViewMode = 'design' | 'preview2d' | 'preview3d'
+export type ViewMode = 'design' | 'preview2d' | 'preview3d' | 'prepare'
 
 export interface StockBounds {
   minX: number

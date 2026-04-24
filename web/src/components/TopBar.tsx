@@ -165,6 +165,17 @@ export function TopBar({
             >
               3D
             </button>
+            <button
+              type="button"
+              className={`flex h-8 min-w-[80px] items-center justify-center rounded-[0.9rem] px-5 text-sm font-medium transition ${
+                viewMode === 'prepare'
+                  ? 'bg-[#3f3f46] text-white'
+                  : 'text-white/40 hover:text-white/60'
+              }`}
+              onClick={() => onViewModeChange('prepare')}
+            >
+              Prepare
+            </button>
           </div>
 
           {/* Generate GCode — immediately after tabs */}

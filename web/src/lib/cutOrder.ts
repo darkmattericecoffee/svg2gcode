@@ -33,12 +33,15 @@ const ROOT_GROUP_NAME = 'Root'
 const SPANNER_AREA_RATIO = 0.35
 /** Leaf whose bounds contain this many other leaves' centroids → spanner. */
 const SPANNER_CONTAIN_COUNT = 3
-/** Extra padding (mm) applied when testing bounds overlap — catches shapes that just touch. */
-const BLOB_BOUNDS_SLOP_MM = 2
-/** Adaptive centroid radius = fraction × sqrt(area_a × area_b). */
+/** Extra padding (mm) applied when testing bounds overlap — catches shapes that nearly touch. */
+const BLOB_BOUNDS_SLOP_MM = 6
+/** Adaptive centroid radius = fraction × geometric mean of the bounds' side lengths. */
 const BLOB_RADIUS_FRACTION = 0.6
 /** Absolute floor for the adaptive radius (mm). */
 const BLOB_MIN_RADIUS_MM = 8
+/** A spanner inside an SVG group is only split out when it behaves like the whole-art outline. */
+const GLOBAL_SPANNER_AREA_RATIO = 0.65
+const GLOBAL_SPANNER_CONTAIN_FRACTION = 0.65
 
 function isGroup(node: CanvasNode | undefined): node is GroupNode {
   return !!node && node.type === 'group'
@@ -49,6 +52,7 @@ interface LeafInfo {
   bounds: Bounds | null
   centroid: { x: number; y: number } | null
   svgIndex: number
+  ancestorGroupIds: string[]
 }
 
 function collectLeavesInSvgOrder(
@@ -57,19 +61,25 @@ function collectLeavesInSvgOrder(
 ): LeafInfo[] {
   const out: LeafInfo[] = []
 
-  function walk(ids: string[]) {
+  function walk(ids: string[], ancestorGroupIds: string[]) {
     for (const id of ids) {
       const node = nodesById[id]
       if (!node || !node.visible) continue
       if (isGroup(node)) {
-        walk(node.childIds)
+        walk(node.childIds, [...ancestorGroupIds, id])
       } else {
-        out.push({ nodeId: id, bounds: null, centroid: null, svgIndex: out.length })
+        out.push({
+          nodeId: id,
+          bounds: null,
+          centroid: null,
+          svgIndex: out.length,
+          ancestorGroupIds,
+        })
       }
     }
   }
 
-  walk(rootIds)
+  walk(rootIds, [])
   return out
 }
 
@@ -85,6 +95,11 @@ function attachGeometry(leaves: LeafInfo[], nodesById: Record<string, CanvasNode
 
 function boundsArea(b: Bounds): number {
   return Math.max(0, b.maxX - b.minX) * Math.max(0, b.maxY - b.minY)
+}
+
+function adaptiveRadius(areaA: number, areaB: number): number {
+  const characteristicLength = Math.sqrt(Math.sqrt(Math.max(0, areaA * areaB)))
+  return Math.max(BLOB_MIN_RADIUS_MM, BLOB_RADIUS_FRACTION * characteristicLength)
 }
 
 function unionAll(bs: Bounds[]): Bounds | null {
@@ -148,6 +163,24 @@ interface Blob {
   name: string
 }
 
+interface Atom {
+  leaves: LeafInfo[]
+  bounds: Bounds
+  centroid: { x: number; y: number }
+  minSvgIndex: number
+  name: string
+  clusterLocked: boolean
+  sourceGroupId: string | null
+}
+
+interface GroupStats {
+  leafCount: number
+}
+
+interface GroupStructureStats {
+  childGroupCount: number
+}
+
 function blobIdFromNodeIds(nodeIds: string[]): string {
   let hash = 2166136261
   for (const nodeId of nodeIds) {
@@ -180,6 +213,62 @@ function makeBlob(leaves: LeafInfo[], isSpanner: boolean, fallbackName: string):
   }
 }
 
+function makeAtom(leaves: LeafInfo[], fallbackName: string, sourceGroupId: string | null): Atom | null {
+  const blob = makeBlob(leaves, false, fallbackName)
+  if (!blob) return null
+  const boundedLeaves = blob.leaves.filter((leaf) => leaf.bounds)
+  const summedArea = boundedLeaves.reduce((sum, leaf) => sum + boundsArea(leaf.bounds!), 0)
+  const unionArea = boundsArea(blob.bounds)
+  const sparseRepeatedSet =
+    boundedLeaves.length >= 3 && unionArea > 0 && summedArea / unionArea < 0.15
+  return {
+    leaves: blob.leaves,
+    bounds: blob.bounds,
+    centroid: blob.centroid,
+    minSvgIndex: blob.minSvgIndex,
+    name: fallbackName,
+    clusterLocked: sparseRepeatedSet,
+    sourceGroupId,
+  }
+}
+
+function groupStats(leaves: LeafInfo[]): Map<string, GroupStats> {
+  const stats = new Map<string, GroupStats>()
+  for (const leaf of leaves) {
+    for (const groupId of leaf.ancestorGroupIds) {
+      const existing = stats.get(groupId) ?? { leafCount: 0 }
+      existing.leafCount += 1
+      stats.set(groupId, existing)
+    }
+  }
+  return stats
+}
+
+function groupStructureStats(nodesById: Record<string, CanvasNode>): Map<string, GroupStructureStats> {
+  const stats = new Map<string, GroupStructureStats>()
+  for (const node of Object.values(nodesById)) {
+    if (!isGroup(node)) continue
+    let childGroupCount = 0
+    for (const childId of node.childIds) {
+      if (isGroup(nodesById[childId])) childGroupCount += 1
+    }
+    stats.set(node.id, { childGroupCount })
+  }
+  return stats
+}
+
+function isLeafOnlyGroup(groupId: string | null, structure: Map<string, GroupStructureStats>): boolean {
+  return groupId != null && (structure.get(groupId)?.childGroupCount ?? 0) === 0
+}
+
+function naturalGroupId(leaf: LeafInfo, stats: Map<string, GroupStats>): string | null {
+  for (let i = leaf.ancestorGroupIds.length - 1; i >= 0; i -= 1) {
+    const groupId = leaf.ancestorGroupIds[i]!
+    if ((stats.get(groupId)?.leafCount ?? 0) >= 2) return groupId
+  }
+  return null
+}
+
 function detectSpanners(leaves: LeafInfo[]): Set<number> {
   const valid = leaves
     .map((l, i) => ({ l, i }))
@@ -209,22 +298,69 @@ function detectSpanners(leaves: LeafInfo[]): Set<number> {
   return spanners
 }
 
-function clusterByProximity(leaves: LeafInfo[]): number[][] {
-  const n = leaves.length
+function countContainedCentroids(
+  leaf: LeafInfo,
+  valid: { l: LeafInfo; i: number }[],
+  leafIndex: number,
+): number {
+  if (!leaf.bounds) return 0
+  let count = 0
+  for (const other of valid) {
+    if (other.i === leafIndex) continue
+    if (other.l.centroid && containsCentroid(leaf.bounds, other.l.centroid)) count += 1
+  }
+  return count
+}
+
+function shouldIsolateSpanner(
+  leaf: LeafInfo,
+  leafIndex: number,
+  valid: { l: LeafInfo; i: number }[],
+  totalArea: number,
+  hasNaturalGroup: boolean,
+  inLeafOnlyGroup: boolean,
+): boolean {
+  if (!leaf.bounds) return false
+  if (!hasNaturalGroup) return true
+  if (inLeafOnlyGroup) return false
+
+  const area = boundsArea(leaf.bounds)
+  if (totalArea > 0 && area / totalArea >= GLOBAL_SPANNER_AREA_RATIO) return true
+
+  const contained = countContainedCentroids(leaf, valid, leafIndex)
+  const globalContainThreshold = Math.max(
+    SPANNER_CONTAIN_COUNT,
+    Math.ceil(Math.max(0, valid.length - 1) * GLOBAL_SPANNER_CONTAIN_FRACTION),
+  )
+  return contained >= globalContainThreshold
+}
+
+function clusterByProximity(
+  items: {
+    leaves?: LeafInfo[]
+    bounds: Bounds
+    centroid: { x: number; y: number }
+    clusterLocked?: boolean
+    sourceGroupId?: string | null
+  }[],
+): number[][] {
+  const n = items.length
   const uf = new UnionFind(n)
   for (let i = 0; i < n; i += 1) {
-    const a = leaves[i]!
-    if (!a.bounds || !a.centroid) continue
+    const a = items[i]!
     const areaA = boundsArea(a.bounds)
     for (let j = i + 1; j < n; j += 1) {
-      const b = leaves[j]!
-      if (!b.bounds || !b.centroid) continue
+      const b = items[j]!
+      if (a.clusterLocked || b.clusterLocked) continue
+      if (a.sourceGroupId && b.sourceGroupId && a.sourceGroupId !== b.sourceGroupId) {
+        continue
+      }
       if (boundsOverlap(a.bounds, b.bounds, BLOB_BOUNDS_SLOP_MM)) {
         uf.union(i, j)
         continue
       }
       const areaB = boundsArea(b.bounds)
-      const radius = Math.max(BLOB_MIN_RADIUS_MM, BLOB_RADIUS_FRACTION * Math.sqrt(areaA * areaB))
+      const radius = adaptiveRadius(areaA, areaB)
       const dx = a.centroid.x - b.centroid.x
       const dy = a.centroid.y - b.centroid.y
       if (Math.hypot(dx, dy) <= radius) uf.union(i, j)
@@ -257,24 +393,63 @@ function computeAutoBlobs(
   if (leaves.length === 0) return { blobs: [], spannerIds: [] }
 
   const spannerSet = detectSpanners(leaves)
+  const valid = leaves
+    .map((l, i) => ({ l, i }))
+    .filter((x): x is { l: LeafInfo; i: number } => !!x.l.bounds && !!x.l.centroid)
+  const unionOfAll = unionAll(valid.map((x) => x.l.bounds!))
+  const totalArea = unionOfAll ? boundsArea(unionOfAll) : 0
+  const stats = groupStats(leaves)
+  const structure = groupStructureStats(nodesById)
 
   const spannerBlobs: Blob[] = []
-  const nonSpanners: LeafInfo[] = []
+  const atomBuckets = new Map<string, { name: string; leaves: LeafInfo[] }>()
+  const singletonAtoms: Atom[] = []
   for (let i = 0; i < leaves.length; i += 1) {
     const leaf = leaves[i]!
-    if (spannerSet.has(i)) {
+    const groupId = naturalGroupId(leaf, stats)
+    if (
+      spannerSet.has(i) &&
+      shouldIsolateSpanner(
+        leaf,
+        i,
+        valid,
+        totalArea,
+        groupId != null,
+        isLeafOnlyGroup(groupId, structure),
+      )
+    ) {
       const node = nodesById[leaf.nodeId]
       const blob = makeBlob([leaf], true, node?.name || leaf.nodeId)
       if (blob) spannerBlobs.push(blob)
+    } else if (groupId) {
+      const bucket = atomBuckets.get(groupId) ?? {
+        name: nodesById[groupId]?.name || 'SVG Group',
+        leaves: [],
+      }
+      bucket.leaves.push(leaf)
+      atomBuckets.set(groupId, bucket)
     } else {
-      nonSpanners.push(leaf)
+      const node = nodesById[leaf.nodeId]
+      const atom = makeAtom([leaf], node?.name || leaf.nodeId, null)
+      if (atom) singletonAtoms.push(atom)
     }
   }
 
-  const clusters = clusterByProximity(nonSpanners)
+  const atoms: Atom[] = [...singletonAtoms]
+  for (const bucket of atomBuckets.values()) {
+    const groupId = naturalGroupId(bucket.leaves[0]!, stats)
+    const atom = makeAtom(bucket.leaves, bucket.name, groupId)
+    if (atom) atoms.push(atom)
+  }
+  atoms.sort((a, b) => a.minSvgIndex - b.minSvgIndex)
+
+  const clusters = clusterByProximity(atoms)
   const detailBlobs: Blob[] = []
   for (const indices of clusters) {
-    const blob = makeBlob(indices.map((i) => nonSpanners[i]!), false, 'Cluster')
+    const clusterAtoms = indices.map((i) => atoms[i]!)
+    const leavesInCluster = clusterAtoms.flatMap((atom) => atom.leaves)
+    const fallbackName = clusterAtoms.length === 1 ? clusterAtoms[0]!.name : 'Cluster'
+    const blob = makeBlob(leavesInCluster, false, fallbackName)
     if (blob) detailBlobs.push(blob)
   }
 

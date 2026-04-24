@@ -180,7 +180,7 @@ describe('computeJobs', () => {
       rect('br', 130, 130, 20, 20, 'import'), // centroid (140, 140)
     ]
     const scene = makeScene(nodes)
-    const plan = computeCutPlan(childIds, scene, BASE_SETTINGS, ARTBOARD)
+    const plan = computeCutPlan(['import'], scene, BASE_SETTINGS, ARTBOARD)
 
     // All four rects fall into one auto job whose Center anchor sits at (125,125).
     // All four centroids are equidistant from the anchor; the stable tie-break
@@ -213,7 +213,7 @@ describe('computeJobs', () => {
         },
       ],
     }
-    const plan = computeCutPlan(childIds, scene, settings, ARTBOARD)
+    const plan = computeCutPlan(['import'], scene, settings, ARTBOARD)
 
     // TopRight anchor resolves to (maxX, minY) of the union bounds = (150, 100).
     // `tr` (140,110) is nearest. From `tr`: `tl` and `br` are equidistant (30),

@@ -11,6 +11,7 @@ import { TopBar } from './components/TopBar'
 import { PreviewCanvas } from './components/preview/PreviewCanvas'
 import { PlaybackTimeline } from './components/preview/PlaybackTimeline'
 import { GcodeViewer } from './components/preview/GcodeViewer'
+import { PreparePanel } from './components/prepare/PreparePanel'
 import { useGcodeGeneration } from './hooks/useGcodeGeneration'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { AppIcon, Icons } from './lib/icons'
@@ -353,8 +354,9 @@ function App() {
 
   const isPreview3d = viewMode === 'preview3d'
   const isPreview2d = viewMode === 'preview2d'
-  const showLibraryEmptyState = !isPreview3d && !isPreview2d && isCanvasEmpty && leftPanelTab === 'library'
-  const showSvgImportEmptyState = !isPreview3d && !isPreview2d && isCanvasEmpty && leftPanelTab !== 'library'
+  const isPrepare = viewMode === 'prepare'
+  const showLibraryEmptyState = !isPreview3d && !isPreview2d && !isPrepare && isCanvasEmpty && leftPanelTab === 'library'
+  const showSvgImportEmptyState = !isPreview3d && !isPreview2d && !isPrepare && isCanvasEmpty && leftPanelTab !== 'library'
 
   return (
     <div
@@ -483,6 +485,8 @@ function App() {
             <div className="min-h-0 flex-1 relative">
               {isPreview3d ? (
                 <PreviewCanvas />
+              ) : isPrepare ? (
+                <PreparePanel projectName={projectName} materialPreset={materialPreset} />
               ) : (
                 <Canvas
                   allowStageSelection={inspectorTab === 'material'}
