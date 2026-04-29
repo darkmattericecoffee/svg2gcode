@@ -2,7 +2,9 @@
 
 import type { ComponentType, Key } from 'react'
 import {
+  Ban,
   BringToFront,
+  CircleCheck,
   ClipboardPaste,
   Copy,
   Group as GroupIcon,
@@ -89,12 +91,18 @@ export function EditorContextMenu({
   const orderSelected = useEditorStore((state) => state.orderSelected)
   const rotateSelected = useEditorStore((state) => state.rotateSelected)
   const setSelectedEngraveType = useEditorStore((state) => state.setSelectedEngraveType)
+  const updateNodeTransform = useEditorStore((state) => state.updateNodeTransform)
+  const pushHistory = useEditorStore((state) => state.pushHistory)
 
   const hasSelection = selectedIds.length > 0
   const canPaste = Boolean(clipboard)
   const selectedNodes = selectedIds
     .map((id) => nodesById[id])
     .filter((node): node is CanvasNode => Boolean(node))
+  // If at least one selected node is currently skipped, the action toggles
+  // every selected node back to "resume". Otherwise we mark all as skipped.
+  const someSelectedSkipped = selectedNodes.some((node) => node.skip === true)
+  const skipActionLabel = someSelectedSkipped ? 'Resume cut' : 'Skip cut'
   const canGroup =
     selectedNodes.length >= 2 &&
     selectedNodes.every((node) => node.parentId === selectedNodes[0]?.parentId)
@@ -147,6 +155,15 @@ export function EditorContextMenu({
       case 'cut-type-pocket':
         setSelectedEngraveType('pocket')
         break
+      case 'skip-toggle': {
+        if (selectedNodes.length === 0) break
+        pushHistory()
+        const nextSkip = !someSelectedSkipped
+        for (const node of selectedNodes) {
+          updateNodeTransform(node.id, { skip: nextSkip } as Partial<CanvasNode>)
+        }
+        break
+      }
       case 'job-new':
         jobActions?.onAddToJob('new')
         break
@@ -286,6 +303,15 @@ export function EditorContextMenu({
             <ItemIcon icon={Trash2} danger />
             <Label>Delete</Label>
             <Shortcut keys={[{ type: 'abbr', value: 'delete' }]} />
+          </Dropdown.Item>
+
+          <Dropdown.Item
+            id="skip-toggle"
+            textValue={skipActionLabel}
+            isDisabled={!hasSelection}
+          >
+            <ItemIcon icon={someSelectedSkipped ? CircleCheck : Ban} />
+            <Label>{skipActionLabel}</Label>
           </Dropdown.Item>
 
           <Dropdown.SubmenuTrigger>

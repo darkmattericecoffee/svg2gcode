@@ -2,7 +2,7 @@ import { useMemo, useRef, useState, useCallback, useEffect } from 'react'
 import type { ChangeEvent, DragEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 
-import { Button, ButtonGroup, Dropdown, Input, Label, ProgressBar, Tabs } from '@heroui/react'
+import { Button, Dropdown, Input, Label, ProgressBar, Tabs } from '@heroui/react'
 import { Canvas } from './Canvas'
 import { LayerTree } from './components/LayerTree'
 import { LibraryPanel } from './components/library/LibraryPanel'
@@ -37,6 +37,8 @@ function App() {
   const rootIds = useEditorStore((state) => state.rootIds)
   const stagePendingImport = useEditorStore((state) => state.stagePendingImport)
   const placePendingImport = useEditorStore((state) => state.placePendingImport)
+  const loadProject = useEditorStore((state) => state.loadProject)
+  const clearScene = useEditorStore((state) => state.clearScene)
   const setImportStatus = useEditorStore((state) => state.setImportStatus)
   const machiningSettings = useEditorStore((state) => state.machiningSettings)
   const setMachiningSettings = useEditorStore((state) => state.setMachiningSettings)
@@ -57,11 +59,19 @@ function App() {
   const isSceneReady = useEditorStore((state) => state.preview.isSceneReady)
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const projectFileInputRef = useRef<HTMLInputElement | null>(null)
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('design')
   const focusTextRequestId = useEditorStore((state) => state.ui.focusTextRequestId)
   useEffect(() => {
     if (focusTextRequestId) setInspectorTab('design')
   }, [focusTextRequestId])
+  const selectedIds = useEditorStore((state) => state.selectedIds)
+  useEffect(() => {
+    if (selectedIds.length === 0) return
+    const current = useEditorStore.getState().nodesById
+    const hasChildSelection = selectedIds.some((id) => current[id]?.parentId != null)
+    if (hasChildSelection) setInspectorTab('cut')
+  }, [selectedIds])
   const [projectName, setProjectName] = useState('Untitled project')
   const [materialPreset, setMaterialPreset] = useState<MaterialPreset>(DEFAULT_MATERIAL)
   const [isDragOver, setIsDragOver] = useState(false)
@@ -175,9 +185,43 @@ function App() {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `${projectName || 'project'}.svg`
+    anchor.download = `${projectName || 'project'}.ngrave`
     anchor.click()
     URL.revokeObjectURL(url)
+  }
+
+  const handleOpenProject = async (file: File) => {
+    try {
+      const svgText = await file.text()
+      const pendingScene = importSvgToScene({
+        artboardWidth: artboard.width,
+        artboardHeight: artboard.height,
+        fileName: file.name,
+        svgText,
+        defaultCutDepth: machiningSettings.defaultDepthMm,
+      })
+
+      const meta = pendingScene.projectMetadata
+      if (!meta) {
+        setImportStatus({ tone: 'error', message: 'This file is not a valid .ngrave project.' })
+        return
+      }
+
+      if (meta.projectName) setProjectName(meta.projectName)
+      if (meta.artboard) setArtboardSize(meta.artboard)
+      if (meta.machiningSettings) setMachiningSettings(meta.machiningSettings)
+      if (meta.materialPreset) handleMaterialChange(meta.materialPreset as MaterialPreset)
+
+      loadProject(pendingScene, artboard)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to open project.'
+      setImportStatus({ tone: 'error', message })
+    }
+  }
+
+  const handleNewProject = () => {
+    setProjectName('Untitled project')
+    clearScene()
   }
 
   const handleCenterlineExport = () => {
@@ -275,6 +319,13 @@ function App() {
     event.target.value = ''
     if (!file) return
     await processSvgFile(file, false)
+  }
+
+  const handleProjectFileInput = async (event: ChangeEvent<HTMLInputElement>) => {
+    const [file] = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (!file) return
+    await handleOpenProject(file)
   }
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -413,6 +464,13 @@ function App() {
         className="hidden"
         onChange={handleSvgImport}
       />
+      <input
+        ref={projectFileInputRef}
+        type="file"
+        accept=".ngrave,.svg"
+        className="hidden"
+        onChange={handleProjectFileInput}
+      />
 
       <Group orientation="horizontal" className="flex-1">
         {/* Left sidebar */}
@@ -441,7 +499,50 @@ function App() {
             ) : (
               <>
                 <div className="shrink-0 border-b border-border px-4 py-4">
-                  <div className="text-xl font-bold text-foreground">Engrav Studio</div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-xl font-bold text-foreground">Engrav Studio</div>
+                    <Dropdown>
+                      <Button
+                        isIconOnly
+                        variant="secondary"
+                        size="sm"
+                        className="cursor-pointer"
+                        aria-label="File menu"
+                      >
+                        <AppIcon icon={Icons.file} className="h-4 w-4 text-foreground" />
+                      </Button>
+                      <Dropdown.Popover placement="bottom end">
+                        <Dropdown.Menu onAction={(key) => {
+                          if (key === 'new') handleNewProject()
+                          else if (key === 'open') projectFileInputRef.current?.click()
+                          else if (key === 'save') handleProjectExport()
+                          else if (key === 'import-svg') fileInputRef.current?.click()
+                          else if (key === 'export-centerlines') handleCenterlineExport()
+                        }}>
+                          <Dropdown.Item id="new">
+                            <AppIcon icon={Icons.squarePlus} className="mr-1.5 inline h-4 w-4 text-foreground" />
+                            New Project
+                          </Dropdown.Item>
+                          <Dropdown.Item id="open">
+                            <AppIcon icon={Icons.folderOpen} className="mr-1.5 inline h-4 w-4 text-foreground" />
+                            Open Project
+                          </Dropdown.Item>
+                          <Dropdown.Item id="save">
+                            <AppIcon icon={Icons.floppyDisk} className="mr-1.5 inline h-4 w-4 text-foreground" />
+                            Save Project
+                          </Dropdown.Item>
+                          <Dropdown.Item id="import-svg">
+                            <AppIcon icon={Icons.fileUpload} className="mr-1.5 inline h-4 w-4 text-foreground" />
+                            Import SVG
+                          </Dropdown.Item>
+                          <Dropdown.Item id="export-centerlines">
+                            <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4 text-foreground" />
+                            Export Centerlines SVG
+                          </Dropdown.Item>
+                        </Dropdown.Menu>
+                      </Dropdown.Popover>
+                    </Dropdown>
+                  </div>
 
                   <Input
                     aria-label="Project name"
@@ -471,43 +572,6 @@ function App() {
                     </Tabs>
                   </div>
 
-                  {leftPanelTab === 'layers' ? (
-                    <ButtonGroup className="mt-4 w-full" variant="secondary" aria-label="Import and export project">
-                      <Button
-                        className="flex-1 cursor-pointer justify-start text-xs font-normal text-foreground"
-                        onPress={() => fileInputRef.current?.click()}
-                      >
-                        <AppIcon icon={Icons.fileUpload} className="h-4 w-4 text-foreground" />
-                        Import SVG
-                      </Button>
-                      <Dropdown>
-                        <Button
-                          isIconOnly
-                          aria-label="More options"
-                          className="cursor-pointer bg-[var(--surface)] text-foreground hover:bg-[var(--surface-secondary)]"
-                        >
-                          <ButtonGroup.Separator />
-                          <AppIcon icon={Icons.fileArrowDown} className="h-4 w-4 text-foreground" />
-                        </Button>
-                        <Dropdown.Popover placement="bottom end">
-                          <Dropdown.Menu onAction={(key) => {
-                            console.log('[export-menu] onAction', key)
-                            if (key === 'export-project') handleProjectExport()
-                            else if (key === 'export-centerlines') handleCenterlineExport()
-                          }}>
-                            <Dropdown.Item id="export-project">
-                              <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4 text-foreground" />
-                              Export Project
-                            </Dropdown.Item>
-                            <Dropdown.Item id="export-centerlines">
-                              <AppIcon icon={Icons.fileArrowDown} className="mr-1.5 inline h-4 w-4 text-foreground" />
-                              Export Centerlines SVG
-                            </Dropdown.Item>
-                          </Dropdown.Menu>
-                        </Dropdown.Popover>
-                      </Dropdown>
-                    </ButtonGroup>
-                  ) : null}
                 </div>
                 {/* Panel body */}
                 <div className="min-h-0 flex-1 overflow-hidden">

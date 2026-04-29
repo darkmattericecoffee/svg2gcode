@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { createRoot } from 'react-dom/client'
+import { flushSync } from 'react-dom'
 import { ChevronDown, ChevronRight } from '@gravity-ui/icons'
 import type { CanvasNode } from '../types/editor'
 import type { CutOrderResult } from '../lib/cutOrder'
@@ -27,6 +29,75 @@ function GroupDragHandleIcon() {
   )
 }
 
+function MultiDragGhostCard({
+  count,
+  node,
+  nodesById,
+}: {
+  count: number
+  node: CanvasNode
+  nodesById: Record<string, CanvasNode>
+}) {
+  const extra = count - 1
+  return (
+    <div
+      style={{
+        position: 'relative',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '5px 10px',
+        background: 'var(--surface-secondary, #2a2a2a)',
+        border: '1px solid var(--border, #444)',
+        borderRadius: 6,
+        fontSize: 12,
+        color: 'var(--foreground, #eee)',
+        whiteSpace: 'nowrap',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+      }}
+    >
+      {[2, 1].map((i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'var(--surface-secondary, #2a2a2a)',
+            border: '1px solid var(--border, #444)',
+            borderRadius: 6,
+            transform: `translate(${i * 3}px, ${i * 3}px)`,
+            zIndex: -i,
+          }}
+        />
+      ))}
+      <LayerPreview node={node} nodesById={nodesById} />
+      <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {node.name || node.id}
+      </span>
+      {extra > 0 && (
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 22,
+            height: 18,
+            padding: '0 5px',
+            background: '#3b82f6',
+            color: '#fff',
+            borderRadius: 9,
+            fontSize: 11,
+            fontWeight: 700,
+            flexShrink: 0,
+          }}
+        >
+          +{extra}
+        </span>
+      )}
+    </div>
+  )
+}
+
 export function CutOrderView({
   cutOrder,
   nodesById,
@@ -39,6 +110,7 @@ export function CutOrderView({
   onContextMenu,
   onReorder,
   onMoveToJob,
+  onMoveMultipleToJob,
   jobs,
   onStartJobAt,
   onRenameJob,
@@ -58,6 +130,7 @@ export function CutOrderView({
   onContextMenu: (id: string, e: React.MouseEvent) => void
   onReorder: (nextOrder: string[]) => void
   onMoveToJob: (nodeId: string, targetJobId: string, targetNodeId: string, before: boolean) => void
+  onMoveMultipleToJob: (nodeIds: string[], targetJobId: string, targetNodeId: string, before: boolean) => void
   onStartJobAt: (cutIndex: number) => void
   onRenameJob?: (jobId: string, name: string) => void
   onReorderJobs?: (nextJobIds: string[]) => void
@@ -92,21 +165,41 @@ export function CutOrderView({
     )
   }
 
+  const isMultiDrag = draggingId !== null && selectedIds.includes(draggingId) && selectedIds.length > 1
+
   function handleDrop(targetId: string, targetJobId: string, before: boolean) {
     if (!draggingId || draggingId === targetId) return
+    if (isMultiDrag && selectedIds.includes(targetId)) return
+
     const sourceJobId = jobs.find((job) => job.nodeIds.includes(draggingId))?.id
     if (sourceJobId && sourceJobId !== targetJobId) {
-      onMoveToJob(draggingId, targetJobId, targetId, before)
+      if (isMultiDrag) {
+        onMoveMultipleToJob(selectedIds, targetJobId, targetId, before)
+      } else {
+        onMoveToJob(draggingId, targetJobId, targetId, before)
+      }
       return
     }
-    const ids = cutOrder.sequence.map((l) => l.nodeId)
-    const fromIdx = ids.indexOf(draggingId)
-    const targetIdx = ids.indexOf(targetId)
-    if (fromIdx < 0 || targetIdx < 0) return
-    const [moved] = ids.splice(fromIdx, 1)
-    const insertIdx = ids.indexOf(targetId) + (before ? 0 : 1)
-    ids.splice(insertIdx, 0, moved)
-    onReorder(ids)
+
+    const allIds = cutOrder.sequence.map((l) => l.nodeId)
+    if (isMultiDrag) {
+      const selectedSet = new Set(selectedIds)
+      const remaining = allIds.filter((id) => !selectedSet.has(id))
+      const targetIdx = remaining.indexOf(targetId)
+      if (targetIdx < 0) return
+      const orderedSelected = allIds.filter((id) => selectedSet.has(id))
+      remaining.splice(targetIdx + (before ? 0 : 1), 0, ...orderedSelected)
+      onReorder(remaining)
+    } else {
+      const ids = [...allIds]
+      const fromIdx = ids.indexOf(draggingId)
+      const targetIdx = ids.indexOf(targetId)
+      if (fromIdx < 0 || targetIdx < 0) return
+      const [moved] = ids.splice(fromIdx, 1)
+      const insertIdx = ids.indexOf(targetId) + (before ? 0 : 1)
+      ids.splice(insertIdx, 0, moved)
+      onReorder(ids)
+    }
   }
 
   function handleSectionDrop(targetJobId: string) {
@@ -115,7 +208,12 @@ export function CutOrderView({
     const targetLeaf = section?.leaves[section.leaves.length - 1]
     const sourceJobId = jobs.find((job) => job.nodeIds.includes(draggingId))?.id
     if (!targetLeaf || sourceJobId === targetJobId || draggingId === targetLeaf.nodeId) return
-    onMoveToJob(draggingId, targetJobId, targetLeaf.nodeId, false)
+    if (isMultiDrag) {
+      if (selectedIds.includes(targetLeaf.nodeId)) return
+      onMoveMultipleToJob(selectedIds, targetJobId, targetLeaf.nodeId, false)
+    } else {
+      onMoveToJob(draggingId, targetJobId, targetLeaf.nodeId, false)
+    }
   }
 
   function commitJobRename(jobId: string) {
@@ -333,7 +431,11 @@ export function CutOrderView({
                 if (!node) return null
                 const selected = selectedIds.includes(leaf.nodeId)
                 const summary = buildLayerCncSummary(node, nodesById, defaultDepth)
-                const isDragging = draggingId === leaf.nodeId
+                const isDragging = draggingId !== null && (
+                  selectedIds.includes(draggingId) && selectedIds.length > 1
+                    ? selectedIds.includes(leaf.nodeId)
+                    : draggingId === leaf.nodeId
+                )
                 const isDropTarget = dropTargetId === leaf.nodeId && draggingId && draggingId !== leaf.nodeId
                 const groupContext = displayGroupContext(leaf.groupName)
                 return (
@@ -369,6 +471,24 @@ export function CutOrderView({
                         setDraggingId(leaf.nodeId)
                         e.dataTransfer.effectAllowed = 'move'
                         e.dataTransfer.setData('text/plain', leaf.nodeId)
+                        const draggingMultiple = selectedIds.includes(leaf.nodeId) && selectedIds.length > 1
+                        if (draggingMultiple && node) {
+                          const wrapper = document.createElement('div')
+                          wrapper.style.cssText = 'position:fixed;top:-9999px;left:-9999px;pointer-events:none;'
+                          document.body.appendChild(wrapper)
+                          const root = createRoot(wrapper)
+                          flushSync(() => {
+                            root.render(
+                              <MultiDragGhostCard
+                                count={selectedIds.length}
+                                node={node}
+                                nodesById={nodesById}
+                              />,
+                            )
+                          })
+                          e.dataTransfer.setDragImage(wrapper, 24, 16)
+                          setTimeout(() => { root.unmount(); document.body.removeChild(wrapper) }, 0)
+                        }
                       }}
                       onDragEnd={() => {
                         setDraggingId(null)

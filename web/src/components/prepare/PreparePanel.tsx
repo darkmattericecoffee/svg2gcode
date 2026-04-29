@@ -68,7 +68,20 @@ function extractDesignInnerSvg(svgText: string): string {
   if (typeof DOMParser === 'undefined') return ''
   const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
   const g = doc.querySelector('svg > g')
-  return g ? g.outerHTML : ''
+  if (!g) return ''
+  // The LayoutDiagram renders the design at mm scale. Imported SVGs often
+  // carry big stroke-widths (e.g. 3mm tool diameter) which visually dominate
+  // smaller shapes in the PDF. Force every stroked child to a thin,
+  // non-scaling stroke so the diagram reads like a blueprint rather than a
+  // toolpath preview.
+  const stroked = g.querySelectorAll<SVGElement>('[stroke]')
+  for (const el of stroked) {
+    const stroke = el.getAttribute('stroke')
+    if (!stroke || stroke === 'none') continue
+    el.setAttribute('stroke-width', '0.3')
+    el.setAttribute('vector-effect', 'non-scaling-stroke')
+  }
+  return g.outerHTML
 }
 
 export function PreparePanel({ projectName, materialPreset, exportOnly = false }: PreparePanelProps) {

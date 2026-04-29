@@ -139,6 +139,10 @@ export interface CanvasNodeBase {
   draggable: boolean
   locked: boolean
   visible: boolean
+  /** Skipped nodes still participate in cut-order/job/anchor calculations so the
+   *  rest of the layout stays aligned, but their derived operations are filtered
+   *  out before reaching the bridge — no GCode is emitted for them. */
+  skip?: boolean
   opacity: number
   parentId: string | null
   cncMetadata?: CncMetadata

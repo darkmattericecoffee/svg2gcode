@@ -1531,6 +1531,16 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
     zoomAroundPoint(nextScale, pointer)
   }
 
+  // Konva registers wheel listeners as passive, so preventDefault() inside onWheel is ignored
+  // by the browser and the page scrolls. We attach a non-passive listener directly to prevent it.
+  useEffect(() => {
+    const container = stageRef.current?.container()
+    if (!container) return
+    const prevent = (e: WheelEvent) => e.preventDefault()
+    container.addEventListener('wheel', prevent, { passive: false })
+    return () => container.removeEventListener('wheel', prevent)
+  }, [])
+
   const beginZoomEdit = () => {
     setZoomDraft(String(Math.round(viewport.scale * 100)))
     setIsZoomEditing(true)
@@ -1767,7 +1777,7 @@ export function Canvas({ allowStageSelection = false, materialPreset = DEFAULT_M
           ) : (
             <>
               {/* Direct selection toggle */}
-              <ToolbarTooltip label="Direct selection" shortcuts={['D', '⌘ Click']} note="Shift+click multi-selects. Shift+⌘ click picks groups.">
+              <ToolbarTooltip label="Direct selection" shortcuts={['D', '⌘ Click']} note="Shift+click multi-selects. Shift+⌘ click multi-selects layers inside groups.">
                 <button
                   type="button"
                   className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition ${effectiveInteractionMode === 'direct' ? 'bg-white/[0.14] text-white' : 'text-white/75 hover:text-white'}`}

@@ -139,6 +139,8 @@ export interface EditorStore {
     position: { x: number; y: number },
     options?: { focusViewport?: boolean },
   ) => void
+  loadProject: (pending: PendingSvgImport, artboard: ArtboardState) => void
+  clearScene: () => void
   clearImportFocusRequest: (requestId: number) => void
   setImportStatus: (status: ImportStatus | null) => void
   requestFocusText: (nodeId: string) => void
@@ -895,6 +897,20 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       })
     })
 
+    // Identify surviving root-group ancestors whose subtree is being mutated.
+    // Their `originalSvg` no longer matches the editor tree, so the bridge
+    // would otherwise re-emit the deleted elements into gcode.
+    const rootsToInvalidate = new Set<string>()
+    idsToDelete.forEach((id) => {
+      let current: CanvasNode | undefined = nodesById[id]
+      while (current?.parentId) {
+        current = nodesById[current.parentId]
+      }
+      if (current && !idsToDelete.has(current.id)) {
+        rootsToInvalidate.add(current.id)
+      }
+    })
+
     const nextNodes = Object.fromEntries(
       Object.entries(nodesById)
         .filter(([id]) => !idsToDelete.has(id))
@@ -903,13 +919,14 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             return [id, node]
           }
 
-          return [
-            id,
-            {
-              ...node,
-              childIds: node.childIds.filter((childId) => !idsToDelete.has(childId)),
-            },
-          ]
+          const nextGroup: GroupNode = {
+            ...node,
+            childIds: node.childIds.filter((childId) => !idsToDelete.has(childId)),
+          }
+          if (rootsToInvalidate.has(id) && nextGroup.originalSvg) {
+            delete nextGroup.originalSvg
+          }
+          return [id, nextGroup]
         }),
     ) as Record<string, CanvasNode>
 
@@ -1389,6 +1406,45 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
       ui: {
         ...state.ui,
         pendingImport: null,
+      },
+    }))
+  },
+  loadProject: (pending, artboard) => {
+    const rootNode = pending.nodesById[pending.rootId]
+    if (!rootNode || rootNode.type !== 'group') return
+    // Project files carry their own saved position on the root group; only
+    // fall back to the artboard origin when no position was preserved.
+    const hasSavedPosition = rootNode.x !== 0 || rootNode.y !== 0
+    const nextRootNode = hasSavedPosition
+      ? { ...rootNode }
+      : { ...rootNode, x: artboard.x, y: artboard.y }
+    set((state) => ({
+      nodesById: { ...pending.nodesById, [pending.rootId]: nextRootNode },
+      rootIds: [pending.rootId],
+      selectedIds: [],
+      selectedStage: false,
+      focusGroupId: null,
+      history: { past: [], future: [] },
+      ui: {
+        ...state.ui,
+        pendingImport: null,
+        importFocusRequest: null,
+        importStatus: { tone: 'success', message: 'Project opened.' },
+      },
+    }))
+  },
+  clearScene: () => {
+    set((state) => ({
+      nodesById: {},
+      rootIds: [],
+      selectedIds: [],
+      selectedStage: false,
+      focusGroupId: null,
+      history: { past: [], future: [] },
+      ui: {
+        ...state.ui,
+        pendingImport: null,
+        importStatus: null,
       },
     }))
   },

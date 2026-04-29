@@ -377,6 +377,57 @@ export function moveLeafToJob(
   }
 }
 
+export function moveMultipleLeafsToJob(
+  cutOrder: CutOrderResult,
+  jobs: Job[] | null,
+  leafIds: string[],
+  targetJobId: string,
+  targetLeafId: string,
+  before: boolean,
+): MoveLeafToJobResult {
+  const currentOrder = orderedLeafIds(cutOrder)
+  const validLeafIds = leafIds.filter((id) => id !== targetLeafId && currentOrder.includes(id))
+  if (validLeafIds.length === 0 || !currentOrder.includes(targetLeafId)) {
+    return { manualCutOrder: currentOrder, manualJobs: normalizeManualJobs(cutOrder, jobs) }
+  }
+
+  const leafIdSet = new Set(validLeafIds)
+  const withoutSelected = currentOrder.filter((id) => !leafIdSet.has(id))
+  const targetIndex = withoutSelected.indexOf(targetLeafId)
+  if (targetIndex < 0) {
+    return { manualCutOrder: currentOrder, manualJobs: normalizeManualJobs(cutOrder, jobs) }
+  }
+  const orderedLeafs = currentOrder.filter((id) => leafIdSet.has(id))
+  const manualCutOrder = [...withoutSelected]
+  manualCutOrder.splice(targetIndex + (before ? 0 : 1), 0, ...orderedLeafs)
+
+  const baseJobs = normalizeManualJobs(cutOrder, jobs)
+  const nextJobs = baseJobs
+    .map((job) => ({ ...job, nodeIds: job.nodeIds.filter((nodeId) => !leafIdSet.has(nodeId)) }))
+    .filter((job) => job.nodeIds.length > 0 || job.id === targetJobId)
+  const targetJob = nextJobs.find((job) => job.id === targetJobId)
+  if (!targetJob) {
+    return { manualCutOrder, manualJobs: nextJobs }
+  }
+
+  const insertIndex = targetJob.nodeIds.indexOf(targetLeafId)
+  const insertAt = insertIndex < 0 ? targetJob.nodeIds.length : insertIndex + (before ? 0 : 1)
+  targetJob.nodeIds.splice(insertAt, 0, ...orderedLeafs)
+
+  const leafById = new Map(cutOrder.sequence.map((leaf) => [leaf.nodeId, leaf]))
+  const nextCutOrder: CutOrderResult = {
+    ...cutOrder,
+    sequence: manualCutOrder
+      .map((nodeId, index) => {
+        const leaf = leafById.get(nodeId)
+        return leaf ? { ...leaf, index } : null
+      })
+      .filter((leaf): leaf is CutOrderResult['sequence'][number] => Boolean(leaf)),
+  }
+
+  return { manualCutOrder, manualJobs: normalizeManualJobs(nextCutOrder, nextJobs) }
+}
+
 interface LeafWithBounds {
   nodeId: string
   bounds: Bounds

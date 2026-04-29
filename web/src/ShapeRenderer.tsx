@@ -94,61 +94,6 @@ interface SharedShapeProps {
 
 const MIN_PLUNGE_HIT_DIAMETER_PX = 18
 
-type GroupHitCandidate = {
-  id: string
-  area: number
-  hitIndex: number
-}
-
-function getDirectGroupHitCandidates(
-  stage: Konva.Stage,
-  position: { x: number; y: number },
-  nodesById: Record<string, CanvasNode>,
-): GroupHitCandidate[] {
-  const candidatesById = new Map<string, GroupHitCandidate>()
-
-  stage.getAllIntersections(position).forEach((shape, hitIndex) => {
-    let current: Konva.Node | null = shape
-
-    while (current) {
-      const id = current.id()
-      const node = id ? nodesById[id] : undefined
-
-      if (node?.type === 'group') {
-        const rect = current.getClientRect()
-        const area = Math.max(0, rect.width) * Math.max(0, rect.height)
-        const existing = candidatesById.get(id)
-
-        if (!existing || area < existing.area || (area === existing.area && hitIndex < existing.hitIndex)) {
-          candidatesById.set(id, { id, area, hitIndex })
-        }
-      }
-
-      current = current.parent
-    }
-  })
-
-  return Array.from(candidatesById.values()).sort(
-    (a, b) => a.area - b.area || a.hitIndex - b.hitIndex,
-  )
-}
-
-function pickDirectGroupCandidate(
-  candidates: GroupHitCandidate[],
-  selectedIds: string[],
-): string | null {
-  if (candidates.length === 0) {
-    return null
-  }
-
-  const selectedIndex = candidates.findIndex((candidate) => selectedIds.includes(candidate.id))
-  if (selectedIndex >= 0) {
-    return candidates[(selectedIndex + 1) % candidates.length].id
-  }
-
-  return candidates[0].id
-}
-
 function SvgPathNode({
   node,
   opacity,
@@ -352,7 +297,7 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   const applyEyedropperPick = useEditorStore((state) => state.applyEyedropperPick)
   const toolDiameter = useEditorStore((state) => state.machiningSettings.toolDiameter)
   const updateNodeTransform = useEditorStore((state) => state.updateNodeTransform)
-  const { enterFocusMode, isSelected, selectMany, selectedIds, selectNode } = useSelection()
+  const { enterFocusMode, isSelected, selectNode } = useSelection()
   const requestFocusText = useEditorStore((state) => state.requestFocusText)
   const startEditingText = useEditorStore((state) => state.startEditingText)
   const editingTextNodeId = useEditorStore((state) => state.ui.editingTextNodeId)
@@ -380,11 +325,14 @@ export const ShapeRenderer = memo(function ShapeRenderer({
   const isDimmed = parentDimmed || effectiveRenderMode === 'dimmed'
   const centerlineOpacity = node.centerlineMetadata?.enabled ? 0.2 : 1
   const hideForInlineEdit = editingTextNodeId !== null && editingTextNodeId === node.id
+  // Skipped nodes stay visible as scaffolding for centerline / anchor reference,
+  // but are dimmed so the user can see at a glance that they won't be cut.
+  const skipMultiplier = node.skip ? 0.35 : 1
   const opacity = hitboxOnly
     ? 0
     : hideForInlineEdit
       ? 0
-      : (isDimmed ? node.opacity * 0.22 : node.opacity) * centerlineOpacity
+      : (isDimmed ? node.opacity * 0.22 : node.opacity) * centerlineOpacity * skipMultiplier
   const resolvedSelectionTarget = resolveSelectionTarget(
     node.id,
     nodesById,
@@ -415,26 +363,6 @@ export const ShapeRenderer = memo(function ShapeRenderer({
     if (!listening || interactionBlocked) return
     if ('button' in event.evt && event.evt.button !== 0) return
     if (!isDirectlyInteractive) return
-
-    const directGroupPick =
-      'shiftKey' in event.evt &&
-      event.evt.shiftKey &&
-      (event.evt.metaKey || event.evt.ctrlKey)
-
-    if (directGroupPick) {
-      const stage = event.target.getStage()
-      const position = stage?.getPointerPosition()
-      if (stage && position) {
-        const candidates = getDirectGroupHitCandidates(stage, position, nodesById)
-        const nextGroupId = pickDirectGroupCandidate(candidates, selectedIds)
-
-        if (nextGroupId) {
-          selectMany([nextGroupId])
-          event.cancelBubble = true
-          return
-        }
-      }
-    }
 
     const additive = 'shiftKey' in event.evt ? event.evt.shiftKey || event.evt.ctrlKey : false
     if (!additive && isSelected(resolvedSelectionTarget)) {

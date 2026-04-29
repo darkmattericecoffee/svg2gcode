@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import type { ComponentType, SVGProps } from 'react'
 
-import { LocationArrow, TextIndent } from '@gravity-ui/icons'
+import { LocationArrow, TextIndent, FolderOpen, FloppyDisk, SquarePlus, File } from '@gravity-ui/icons'
 import ArrowChevronDownIcon from '@gravity-ui/icons/esm/ArrowChevronDown.js'
 import ArrowChevronRightIcon from '@gravity-ui/icons/esm/ArrowChevronRight.js'
 import ArrowRotateLeftIcon from '@gravity-ui/icons/esm/ArrowRotateLeft.js'
@@ -26,7 +26,7 @@ import ObjectAlignTopIcon from '@gravity-ui/icons/esm/ObjectAlignTop.js'
 import PictureIcon from '@gravity-ui/icons/esm/Picture.js'
 import PlusIcon from '@gravity-ui/icons/esm/Plus.js'
 import SquareDashedIcon from '@gravity-ui/icons/esm/SquareDashed.js'
-import { Pipette } from 'lucide-react'
+import { Ban, Pipette } from 'lucide-react'
 
 export type AppIconComponent = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -48,11 +48,16 @@ export const Icons = {
   eyeOff: EyeSlashIcon,
   fileArrowDown: FileArrowDownIcon,
   fileUpload: FileArrowUpIcon,
+  folderOpen: FolderOpen,
+  floppyDisk: FloppyDisk,
+  squarePlus: SquarePlus,
+  file: File,
   fit: SquareDashedIcon,
   hand: HandIcon,
   layers: LayersIcon,
   lock: LockIcon,
   lockOpen: LockOpenIcon,
+  skip: Ban,
   minus: MinusIcon,
   picture: PictureIcon,
   pipette: Pipette,

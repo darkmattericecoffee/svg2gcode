@@ -18,6 +18,12 @@ interface SerializeContext {
   nodesById: Record<string, CanvasNode>
   /** When true, substitute a solid fill for closed nodes whose resolved engraveType is "pocket". */
   forcePocketFill: boolean
+  /** When true, emit `id="${node.id}"` so identity round-trips through .ngrave save/open. */
+  includeNodeIds: boolean
+}
+
+function idAttr(node: CanvasNode, ctx: SerializeContext): string {
+  return ctx.includeNodeIds ? attr('id', node.id) : ''
 }
 
 function effectiveFill(node: CanvasNode, ctx: SerializeContext, fallback: string = 'none'): string {
@@ -141,13 +147,14 @@ function serializeGroup(
     .filter(Boolean)
     .join('\n')
 
-  return `${indent}<g${transform}${opacityAttr}${centerlineDataAttrs(node)}>\n${children}\n${indent}</g>`
+  return `${indent}<g${idAttr(node, ctx)}${transform}${opacityAttr}${centerlineDataAttrs(node)}>\n${children}\n${indent}</g>`
 }
 
 function serializeRect(node: RectNode, ctx: SerializeContext, indent: string): string {
   const transform = serializeTransform(0, 0, node.rotation, node.scaleX, node.scaleY)
   return (
     `${indent}<rect` +
+    idAttr(node, ctx) +
     attr('x', node.x) +
     attr('y', node.y) +
     attr('width', node.width) +
@@ -175,6 +182,7 @@ function serializeCircle(node: CircleNode, ctx: SerializeContext, indent: string
     return (
       `${indent}<g${transform}>\n` +
       `${indent}  <circle` +
+      idAttr(node, ctx) +
       attr('cx', 0) +
       attr('cy', 0) +
       attr('r', node.radius) +
@@ -191,6 +199,7 @@ function serializeCircle(node: CircleNode, ctx: SerializeContext, indent: string
 
   return (
     `${indent}<circle` +
+    idAttr(node, ctx) +
     attr('cx', node.x) +
     attr('cy', node.y) +
     attr('r', node.radius) +
@@ -217,6 +226,7 @@ function serializeLine(node: LineNode, ctx: SerializeContext, indent: string): s
 
   return (
     `${indent}<${tag}` +
+    idAttr(node, ctx) +
     attr('points', pointsStr) +
     attr('stroke', node.stroke ?? 'none') +
     attr('stroke-width', node.strokeWidth) +
@@ -237,6 +247,7 @@ function serializePath(node: PathNode, ctx: SerializeContext, indent: string): s
   const transform = serializeTransform(node.x, node.y, node.rotation, node.scaleX, node.scaleY)
   return (
     `${indent}<path` +
+    idAttr(node, ctx) +
     attr('d', node.data) +
     attr('fill', effectiveFill(node, ctx)) +
     attr('stroke', node.stroke ?? 'none') +
@@ -303,7 +314,11 @@ export function exportToSVG(
   options: ExportToSVGOptions = {},
 ): string {
   const { width, height, x: artX, y: artY } = artboard
-  const ctx: SerializeContext = { nodesById, forcePocketFill: options.forcePocketFill ?? false }
+  const ctx: SerializeContext = {
+    nodesById,
+    forcePocketFill: options.forcePocketFill ?? false,
+    includeNodeIds: false,
+  }
 
   const innerIndent = '    '
   const rootContent = rootIds
@@ -346,7 +361,8 @@ export function exportProjectSVG(
 ): string {
   const { width, height, x: artX, y: artY } = artboard
   // Project save never substitutes fills — we want lossless round-trip.
-  const ctx: SerializeContext = { nodesById, forcePocketFill: false }
+  // Emit node IDs so manualCutOrder references survive save/open.
+  const ctx: SerializeContext = { nodesById, forcePocketFill: false, includeNodeIds: true }
 
   const innerIndent = '    '
   const rootContent = rootIds

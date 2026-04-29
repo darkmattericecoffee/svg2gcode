@@ -23,6 +23,7 @@ import { mergeCncMetadata } from "./cncMetadata"
 import { buildCenterlineExportNodes, subtreeHasActiveCenterline } from "./centerline"
 import { getSubtreeIds, isGroupNode } from "./editorTree"
 import { getNodeSize } from "./nodeDimensions"
+import { getNodePreviewBounds, type Bounds } from "./nodeBounds"
 import { exportToSVG } from "./svgExport"
 import { buildBridgeSettings, resolveEffectiveMaxStepdown } from "./bridgeSettingsAdapter"
 import { type CutOrderResult } from "./cutOrder"
@@ -45,9 +46,10 @@ export async function editorStateToArtObjects(
   artboard: ArtboardState,
   machiningSettings: MachiningSettings,
   baseSettings: Settings,
-): Promise<ArtObject[]> {
+): Promise<{ artObjects: ArtObject[]; skippedCompositeIds: Set<string> }> {
   const settings = buildBridgeSettings(baseSettings, artboard, machiningSettings)
   const artObjects: ArtObject[] = []
+  const skippedCompositeIds = new Set<string>()
 
   const { cutOrder, jobs } = computeCutPlan(rootIds, nodesById, machiningSettings, artboard)
   const cutOrderLookup = buildCutOrderLookup(cutOrder)
@@ -68,6 +70,17 @@ export async function editorStateToArtObjects(
     const nodeSize = getNodeSize(rootNode, nodesById)
     const usesGeneratedCenterlineSvg = exportInfo.usesGeneratedCenterlineSvg
 
+    // For rotated roots, use the rotated AABB for placement and dimensions.
+    // `nodeSize` ignores rotation, so falls back to the un-rotated box; the
+    // rotated SVG content from `buildRotationAlignedExport` fits the AABB.
+    const rotatedAabb: Bounds | null = isRotated(rootNode)
+      ? getNodePreviewBounds(rootNode, nodesById)
+      : null
+    const placementWidth = rotatedAabb ? rotatedAabb.maxX - rotatedAabb.minX : nodeSize.width
+    const placementHeight = rotatedAabb ? rotatedAabb.maxY - rotatedAabb.minY : nodeSize.height
+    const placementOriginX = rotatedAabb ? rotatedAabb.minX : rootNode.x
+    const placementOriginY = rotatedAabb ? rotatedAabb.minY : rootNode.y
+
     // Expand grid nodes into N×M individual art objects
     const grid = rootNode.gridMetadata
     const rows = grid ? Math.max(1, grid.rows) : 1
@@ -87,11 +100,11 @@ export async function editorStateToArtObjects(
           existingArtObjects: artObjects,
         })
 
-        artObject.widthMm = nodeSize.width
-        artObject.heightMm = nodeSize.height
-        artObject.placementX = rootNode.x + c * (nodeSize.width + colGap)
-        const cellCanvasY = rootNode.y + r * (nodeSize.height + rowGap)
-        artObject.placementY = artboard.height - cellCanvasY - nodeSize.height
+        artObject.widthMm = placementWidth
+        artObject.heightMm = placementHeight
+        artObject.placementX = placementOriginX + c * (placementWidth + colGap)
+        const cellCanvasY = placementOriginY + r * (placementHeight + rowGap)
+        artObject.placementY = artboard.height - cellCanvasY - placementHeight
 
         // For generator nodes and synthesized shapes (no originalSvg), getSvgTextForNode
         // calls exportToSVG with an artboard-sized viewport (e.g. viewBox="0 0 600 500").
@@ -109,16 +122,23 @@ export async function editorStateToArtObjects(
         // the transform that's already baked into the SVG. Generators stay at scaleX=1
         // (parametric resize rewrites the underlying data), so for them nodeSize.width ==
         // nodeSize.baseWidth and this change is a no-op.
-        const hasOriginalSvg = isGroupNode(rootNode) && Boolean((rootNode as GroupNode).originalSvg) && !usesGeneratedCenterlineSvg
-        if ((usesGeneratedCenterlineSvg || !hasOriginalSvg) && nodeSize.width > 0 && nodeSize.height > 0) {
+        // The originalSvg fast path is only used when the root has no rotation;
+        // otherwise we went through buildRotationAlignedExport (an artboard-sized
+        // SVG with content shifted to fit (0,0)-(placement size)), and need the
+        // same svgMetrics override the centerline / synthesized-shape paths use.
+        const hasOriginalSvg = isGroupNode(rootNode)
+          && Boolean((rootNode as GroupNode).originalSvg)
+          && !usesGeneratedCenterlineSvg
+          && !isRotated(rootNode)
+        if ((usesGeneratedCenterlineSvg || !hasOriginalSvg) && placementWidth > 0 && placementHeight > 0) {
           artObject.svgMetrics = {
             x: 0,
             y: 0,
-            width: nodeSize.width,
-            height: nodeSize.height,
-            widthMm: nodeSize.width,
-            heightMm: nodeSize.height,
-            aspectRatio: nodeSize.width / nodeSize.height,
+            width: placementWidth,
+            height: placementHeight,
+            widthMm: placementWidth,
+            heightMm: placementHeight,
+            aspectRatio: placementWidth / placementHeight,
           }
         }
 
@@ -130,13 +150,28 @@ export async function editorStateToArtObjects(
           cutOrderLookup,
           jobIdByNodeId,
           artObjects.length,
+          { skippedCompositeIds, sourceNodesById: nodesById },
         )
         artObjects.push(artObject)
       }
     }
   }
 
-  return artObjects
+  return { artObjects, skippedCompositeIds }
+}
+
+/** A node is effectively skipped if it (or any ancestor) has `skip=true`. */
+function isEffectivelySkipped(
+  nodeId: string,
+  nodesById: Record<string, CanvasNode>,
+): boolean {
+  let cur: CanvasNode | undefined = nodesById[nodeId]
+  while (cur) {
+    if (cur.skip) return true
+    if (!cur.parentId) break
+    cur = nodesById[cur.parentId]
+  }
+  return false
 }
 
 interface CutOrderLookup {
@@ -173,7 +208,7 @@ export async function prepareGenerationInputs(
   machiningSettings: MachiningSettings,
   baseSettings: Settings,
 ) {
-  const artObjects = await editorStateToArtObjects(
+  const { artObjects } = await editorStateToArtObjects(
     nodesById,
     rootIds,
     artboard,
@@ -189,6 +224,10 @@ export async function prepareGenerationInputs(
   // we pass `null` so `buildBridgeSettings` keeps the legacy single-anchor path.
   const { jobs: computedJobs } = computeCutPlan(rootIds, nodesById, machiningSettings, artboard)
 
+  // Skipped elements have already had their assignments deleted in
+  // `applyEditorCncMetadata`, so they're absent from the bridge's grouping +
+  // operation derivation here. Anchor / job calculations above ran on the full
+  // scene (including skipped nodes), so the layout stays aligned.
   const operations = getDerivedOperationsForArtObjects(artObjects)
   const jobSpecs = machiningSettings.jobsEnabled
     ? jobSpecsFromComputedJobs(computedJobs, operations, artObjects)
@@ -297,6 +336,52 @@ interface SvgTextForNode {
   usesGeneratedCenterlineSvg: boolean
 }
 
+function isRotated(node: CanvasNode): boolean {
+  return node.rotation !== 0
+}
+
+function buildRotationAlignedExport(
+  rootId: string,
+  sourceNodes: Record<string, CanvasNode>,
+  artboard: ArtboardState,
+  preserveAttrs: { forcePocketFill: boolean },
+): { svgText: string; nodesById: Record<string, CanvasNode>; rootNode: CanvasNode } | null {
+  const subtreeIds = getSubtreeIds(rootId, sourceNodes)
+  const sourceRoot = sourceNodes[rootId]
+  if (!sourceRoot) return null
+
+  // Compute the root's local AABB after rotation/scale, with translate zeroed.
+  // This is the bounding box of the rotated content in the SVG's coordinate space.
+  const localProbeRoot = { ...sourceRoot, x: 0, y: 0 }
+  const localProbeNodes: Record<string, CanvasNode> = {}
+  for (const id of subtreeIds) {
+    localProbeNodes[id] = id === rootId ? localProbeRoot : sourceNodes[id]!
+  }
+  const localBounds = getNodePreviewBounds(localProbeRoot, localProbeNodes)
+  if (!localBounds) return null
+
+  // Shift the root so the rotated content's AABB top-left lands on (0, 0)
+  // in the exported SVG. The bridge expects svgMetrics to describe content
+  // starting at (0, 0).
+  const exportRoot: CanvasNode = {
+    ...sourceRoot,
+    x: -localBounds.minX,
+    y: -localBounds.minY,
+  }
+  const exportNodes: Record<string, CanvasNode> = {}
+  for (const id of subtreeIds) {
+    exportNodes[id] = id === rootId ? exportRoot : sourceNodes[id]!
+  }
+
+  const svgText = exportToSVG(
+    exportNodes,
+    [rootId],
+    { ...artboard, x: 0, y: 0 },
+    { forcePocketFill: preserveAttrs.forcePocketFill },
+  )
+  return { svgText, nodesById: exportNodes, rootNode: exportRoot }
+}
+
 function getSvgTextForNode(
   node: CanvasNode,
   nodeId: string,
@@ -327,8 +412,12 @@ function getSvgTextForNode(
   }
 
   // Prefer the stored original SVG from import (but not for generator groups —
-  // those need per-child export so each shape becomes a separate operation)
-  if (isGroupNode(node) && node.originalSvg && !(node as GroupNode).generatorMetadata) {
+  // those need per-child export so each shape becomes a separate operation).
+  // Skip the fast path when the root has been rotated: the raw originalSvg has
+  // no rotation applied, and the bridge's placement assumes content runs from
+  // (0,0) to (widthMm,heightMm) — without baking rotation in, the cuts would
+  // land at the un-rotated position.
+  if (isGroupNode(node) && node.originalSvg && !(node as GroupNode).generatorMetadata && !isRotated(node)) {
     return {
       svgText: node.originalSvg,
       metadataRootNode: node,
@@ -337,31 +426,13 @@ function getSvgTextForNode(
     }
   }
 
-  // Fallback: export this single node as SVG
-  // Create a minimal nodesById with just this subtree
-  const subtreeIds = getSubtreeIds(nodeId, nodesById)
-  const subtreeNodes: Record<string, CanvasNode> = {}
-  for (const id of subtreeIds) {
-    const subtreeNode = nodesById[id]
-    if (subtreeNode) {
-      subtreeNodes[id] = id === nodeId
-        ? { ...subtreeNode, x: 0, y: 0 }
-        : subtreeNode
-    }
-  }
-
-  const metadataRootNode = subtreeNodes[nodeId]
-  if (!metadataRootNode) return null
+  const aligned = buildRotationAlignedExport(nodeId, nodesById, artboard, { forcePocketFill: true })
+  if (!aligned) return null
 
   return {
-    svgText: exportToSVG(
-      subtreeNodes,
-      [nodeId],
-      { ...artboard, x: 0, y: 0 },
-      { forcePocketFill: true },
-    ),
-    metadataRootNode,
-    metadataNodesById: subtreeNodes,
+    svgText: aligned.svgText,
+    metadataRootNode: aligned.rootNode,
+    metadataNodesById: aligned.nodesById,
     usesGeneratedCenterlineSvg: false,
   }
 }
@@ -397,6 +468,14 @@ function applyEditorCncMetadata(
   cutOrder?: CutOrderLookup,
   jobIdByNodeId?: Map<string, string>,
   artObjectOrdinal = 0,
+  skipTracking?: {
+    skippedCompositeIds: Set<string>
+    /** The user-facing scene tree, used to walk parent chains for skip
+     *  inheritance. `nodesById` may be a synthesized export tree (centerline /
+     *  rotation-aligned) — its leaves still reference original node ids, so we
+     *  resolve skip against the original scene to get the right answer. */
+    sourceNodesById: Record<string, CanvasNode>
+  },
 ) {
   // Collect leaf nodes with CNC metadata in document order
   const leafMetadata = collectLeafCncMetadata(rootNode, nodesById)
@@ -421,8 +500,24 @@ function applyEditorCncMetadata(
     const assignment = artObject.elementAssignments[compositeId]
     if (!assignment) continue
 
-    // Check if there's a positional match from editor leaf metadata
+    // Skip-tracking has to happen before we apply CNC metadata. When an element
+    // is skipped, we delete its assignment entirely so the bridge's grouping
+    // pass (`groupAssignmentsForIds`) never folds it into an operation. This is
+    // necessary because the bridge bundles every element sharing the same
+    // jobId+cutOrderGroupId+depth+engraveType+fillMode into one operation —
+    // dropping such an op only when ALL its members are skipped lets partial-
+    // skips slip through (e.g. skipping 4 of 9 letters in a single text fill).
     const leafMeta = leafMetadata[i]
+    if (skipTracking) {
+      const skipNodeId = leafMeta?.nodeId ?? rootNode.id
+      if (isEffectivelySkipped(skipNodeId, skipTracking.sourceNodesById)) {
+        skipTracking.skippedCompositeIds.add(compositeId)
+        delete artObject.elementAssignments[compositeId]
+        continue
+      }
+    }
+
+    // Check if there's a positional match from editor leaf metadata
     if (leafMeta) {
       assignment.targetDepthMm = leafMeta.cutDepth ?? rootDepth
       assignment.engraveType = leafMeta.engraveType

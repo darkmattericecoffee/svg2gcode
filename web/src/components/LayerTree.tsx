@@ -11,6 +11,7 @@ import {
   computeCutPlan,
   manualJobsFromComputed,
   moveLeafToJob,
+  moveMultipleLeafsToJob,
   normalizeManualJobs,
   reorderManualJobs,
   splitManualJobsAtCutIndex,
@@ -565,6 +566,22 @@ export function LayerTree({ fixedView, hideModeTabs = false }: LayerTreeProps = 
     setSelectedJob(targetJobId)
   }
 
+  const handleMoveMultipleToJob = (
+    nodeIds: string[],
+    targetJobId: string,
+    targetNodeId: string,
+    before: boolean,
+  ) => {
+    if (!jobsEnabled) return
+    const result = moveMultipleLeafsToJob(cutOrder, manualJobSeed, nodeIds, targetJobId, targetNodeId, before)
+    setMachiningSettings({
+      cutOrderStrategy: 'manual',
+      manualCutOrder: result.manualCutOrder,
+      manualJobs: result.manualJobs,
+    })
+    setSelectedJob(targetJobId)
+  }
+
   const handleRenameJob = (jobId: string, name: string) => {
     if (!jobsEnabled) return
     const seed = manualJobs ?? manualJobSeed
@@ -678,6 +695,13 @@ export function LayerTree({ fixedView, hideModeTabs = false }: LayerTreeProps = 
   function handleToggleLocked(id: string) {
     const node = nodesById[id]
     if (node) updateNodeTransform(id, { locked: !node.locked })
+  }
+
+  function handleToggleSkip(id: string) {
+    const node = nodesById[id]
+    if (!node) return
+    pushHistory()
+    updateNodeTransform(id, { skip: !node.skip } as Partial<CanvasNode>)
   }
 
   function handleStartRename(node: CanvasNode) {
@@ -885,6 +909,7 @@ export function LayerTree({ fixedView, hideModeTabs = false }: LayerTreeProps = 
           onContextMenu={handleRowContextMenu}
           onStartJobAt={startJobAt}
           onMoveToJob={handleMoveToJob}
+          onMoveMultipleToJob={handleMoveMultipleToJob}
           onReorder={handleCutOrderReorder}
           onRenameJob={jobsEnabled ? handleRenameJob : undefined}
           onReorderJobs={jobsEnabled ? handleReorderJobs : undefined}
@@ -1013,6 +1038,32 @@ export function LayerTree({ fixedView, hideModeTabs = false }: LayerTreeProps = 
                       >
                         <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3.5 w-3.5" />
                       </span>
+                      <span
+                        role="button"
+                        tabIndex={-1}
+                        aria-label={node.skip ? 'Resume cutting this layer' : 'Skip cutting this layer (anchor still calculated)'}
+                        title={node.skip ? 'Skipped — no GCode emitted, anchor still calculated' : 'Skip cut (keep anchor calc)'}
+                        className={cn(
+                          'inline-flex h-5 w-5 items-center justify-center rounded transition-opacity hover:bg-[var(--surface-tertiary)]',
+                          node.skip
+                            ? 'opacity-100 text-amber-500'
+                            : 'text-muted-foreground opacity-0 group-hover/row:opacity-100',
+                        )}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleToggleSkip(id)
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            handleToggleSkip(id)
+                          }
+                        }}
+                      >
+                        <AppIcon icon={Icons.skip} className="h-3.5 w-3.5" />
+                      </span>
                       {isGroup && (node as GroupNode).generatorMetadata ? (
                         (node as GroupNode).generatorMetadata?.params.kind === 'text' ? (
                           <span title="Text generator" className="text-primary/70">
@@ -1057,6 +1108,7 @@ export function LayerTree({ fixedView, hideModeTabs = false }: LayerTreeProps = 
                           onRowMouseLeave={handleRowMouseLeave}
                           onToggleVisible={handleToggleVisible}
                           onToggleLocked={handleToggleLocked}
+                          onToggleSkip={handleToggleSkip}
                           defaultDepth={defaultDepth}
                           renamingId={renamingId}
                           renameDraft={renameDraft}
@@ -1094,6 +1146,7 @@ function TreeNode({
   onRowMouseLeave,
   onToggleVisible,
   onToggleLocked,
+  onToggleSkip,
   defaultDepth,
   renamingId,
   renameDraft,
@@ -1116,6 +1169,7 @@ function TreeNode({
   onRowMouseLeave: () => void
   onToggleVisible: (id: string) => void
   onToggleLocked: (id: string) => void
+  onToggleSkip: (id: string) => void
   defaultDepth: number
   renamingId: string | null
   renameDraft: string
@@ -1243,6 +1297,32 @@ function TreeNode({
           >
             <AppIcon icon={node.locked ? Icons.lock : Icons.lockOpen} className="h-3 w-3" />
           </span>
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={node.skip ? 'Resume cutting this layer' : 'Skip cutting this layer (anchor still calculated)'}
+            title={node.skip ? 'Skipped — no GCode emitted, anchor still calculated' : 'Skip cut (keep anchor calc)'}
+            className={cn(
+              'inline-flex h-4 w-4 items-center justify-center rounded transition-opacity hover:bg-[var(--surface-tertiary)]',
+              node.skip
+                ? 'opacity-100 text-amber-500'
+                : 'text-muted-foreground opacity-0 group-hover/row:opacity-100',
+            )}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleSkip(nodeId)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                onToggleSkip(nodeId)
+              }
+            }}
+          >
+            <AppIcon icon={Icons.skip} className="h-3 w-3" />
+          </span>
           {isGroup && (node as GroupNode).generatorMetadata ? (
             (node as GroupNode).generatorMetadata?.params.kind === 'text' ? (
               <span title="Text generator" className="text-primary/70">
@@ -1286,6 +1366,7 @@ function TreeNode({
               onRowMouseLeave={onRowMouseLeave}
               onToggleVisible={onToggleVisible}
               onToggleLocked={onToggleLocked}
+              onToggleSkip={onToggleSkip}
               defaultDepth={defaultDepth}
               renamingId={renamingId}
               renameDraft={renameDraft}

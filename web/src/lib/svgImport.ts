@@ -827,7 +827,13 @@ export function importSvgToScene({
     }
 
     const paint = readSvgPaint(element, context.paint, stylesheet)
-    const nodeId = createNodeId(context.idPrefix, tagName, nodeIndex)
+    // For .ngrave project files, reuse the element's `id` (written on save) so
+    // that references like manualCutOrder survive the round-trip. For plain
+    // SVG imports we generate fresh IDs to avoid collisions with author-set ids.
+    const savedId = projectMetadata ? element.getAttribute('id')?.trim() : undefined
+    const nodeId = savedId && !nodesById[savedId]
+      ? savedId
+      : createNodeId(context.idPrefix, tagName, nodeIndex)
     const opacity = parseOpacity(getStyleValue(element, styleMap, 'opacity', stylesheet))
     const visible = isVisible(element, styleMap, stylesheet)
     const rawCncMetadata = readCncMetadata(element)
@@ -1078,7 +1084,8 @@ export function importSvgToScene({
     const effectiveHeight = Math.max(1, normalizedBounds.height)
     const availableWidth = Math.max(1, artboardWidth - IMPORT_PADDING * 2)
     const availableHeight = Math.max(1, artboardHeight - IMPORT_PADDING * 2)
-    const fitScale = Math.min(
+    // Project files store exact coordinates — never rescale on open.
+    const fitScale = projectMetadata ? 1 : Math.min(
       1,
       availableWidth / effectiveWidth,
       availableHeight / effectiveHeight,
@@ -1091,6 +1098,13 @@ export function importSvgToScene({
     const contentOrigin = preShiftCapture.bounds
       ? { x: preShiftCapture.bounds.x, y: preShiftCapture.bounds.y }
       : { x: 0, y: 0 }
+
+    // Project files preserve the saved position; fresh SVG imports leave
+    // the root at (0,0) so placePendingImport can drop it where the user clicks.
+    if (projectMetadata) {
+      rootNode.x = contentOrigin.x
+      rootNode.y = contentOrigin.y
+    }
     const normalizedOriginalSvg = buildNormalizedSvgText(
       svgText,
       contentOrigin,
